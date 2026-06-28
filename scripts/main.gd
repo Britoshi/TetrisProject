@@ -30,6 +30,12 @@ var das_right_active: bool = false
 var line_clear_timer: float = 0.0
 var cleared_row_indices: Array[int] = []
 
+# ── Scaled layout (recomputed on resize) ──
+var _cell_size: int = 32
+var _board_x: int = 100
+var _board_y: int = 20
+var _font_scale: float = 1.0
+
 
 # ── Init ──
 
@@ -37,6 +43,7 @@ func _ready() -> void:
 	print("=== _ready() start ===")
 	_setup_input_actions()
 	print("  input actions set up")
+	_update_layout()
 	piece_data = get_node_or_null("/root/PieceData")
 	print("  piece_data autoload: ", piece_data)
 	if piece_data == null:
@@ -84,6 +91,22 @@ func _create_input_event(action: String, keycode: int) -> void:
 	var ev := InputEventKey.new()
 	ev.keycode = keycode
 	InputMap.action_add_event(action, ev)
+
+
+func _update_layout() -> void:
+	var vp_size := get_viewport_rect().size
+	if vp_size.x <= 0:
+		return
+	var layout := Constants.calculate_layout(vp_size)
+	_cell_size = layout.cell_size
+	_board_x = layout.board_x
+	_board_y = layout.board_y
+	_font_scale = layout.font_scale
+
+
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_RESIZED:
+		_update_layout()
 
 
 # ── Spawning ──
@@ -339,9 +362,13 @@ func _draw() -> void:
 	if _draw_count == 2:
 		print("  second _draw() — still alive")
 
-	var cs: int = Constants.CELL_SIZE
-	var bx: int = Constants.BOARD_X
-	var by: int = Constants.BOARD_Y
+	var cs: int = _cell_size
+	var bx: int = _board_x
+	var by: int = _board_y
+	var margin: int = maxi(4, cs / 4)
+	var font_s: int = int(14 * _font_scale)
+	var font_m: int = int(16 * _font_scale)
+	var font_l: int = int(24 * _font_scale)
 
 	# Full background fill — confirms _draw() is running
 	var vp_rect = get_viewport_rect()
@@ -392,30 +419,32 @@ func _draw() -> void:
 	if state == State.GAME_OVER:
 		draw_rect(Rect2(bx - 2, by - 2, board_width + 4, board_height + 4), Color.RED, false, 3.0)
 		var font = ThemeDB.fallback_font
-		draw_string(font, Vector2(bx + 10, by + board_height / 2), "GAME OVER",
-			HORIZONTAL_ALIGNMENT_LEFT, -1, 24, Color.RED)
+		draw_string(font, Vector2(bx + margin, by + board_height / 2), "GAME OVER",
+			HORIZONTAL_ALIGNMENT_LEFT, -1, font_l, Color.RED)
 
 	# Score display
 	var font = ThemeDB.fallback_font
-	draw_string(font, Vector2(bx + board_width + 20, by + 20),
-		"Score: %d" % score, HORIZONTAL_ALIGNMENT_LEFT, -1, 16)
-	draw_string(font, Vector2(bx + board_width + 20, by + 45),
-		"Lines: %d" % lines_cleared, HORIZONTAL_ALIGNMENT_LEFT, -1, 16)
-	draw_string(font, Vector2(bx + board_width + 20, by + 70),
-		"Level: %d" % level, HORIZONTAL_ALIGNMENT_LEFT, -1, 16)
+	var right_x: int = bx + board_width + margin
+	draw_string(font, Vector2(right_x, by + cs),
+		"Score: %d" % score, HORIZONTAL_ALIGNMENT_LEFT, -1, font_m)
+	draw_string(font, Vector2(right_x, by + cs + font_m + 6),
+		"Lines: %d" % lines_cleared, HORIZONTAL_ALIGNMENT_LEFT, -1, font_m)
+	draw_string(font, Vector2(right_x, by + cs + (font_m + 6) * 2),
+		"Level: %d" % level, HORIZONTAL_ALIGNMENT_LEFT, -1, font_m)
 
 	# Next piece preview
 	if state != State.GAME_OVER:
 		var next_pieces = bag.peek_next(3)
-		draw_string(font, Vector2(bx + board_width + 20, by + 110),
-			"Next:", HORIZONTAL_ALIGNMENT_LEFT, -1, 14)
+		var next_y: int = by + cs + (font_m + 6) * 3 + margin
+		draw_string(font, Vector2(right_x, next_y),
+			"Next:", HORIZONTAL_ALIGNMENT_LEFT, -1, font_s)
 		for i in range(next_pieces.size()):
 			var preview_type: int = next_pieces[i]
 			var preview_color = Constants.COLORS.get(preview_type, Color.GRAY)
 			var preview_offsets = piece_data.CELLS[preview_type][0]
-			var py: int = by + 135 + i * 60
+			var py: int = next_y + font_s + margin + i * (cs * 3)
 			for off in preview_offsets:
-				var px: int = bx + board_width + 20 + off.x * (cs / 2)
+				var px: int = right_x + off.x * (cs / 2)
 				draw_rect(Rect2(px, py + off.y * (cs / 2), cs / 2, cs / 2), preview_color)
 				draw_rect(Rect2(px, py + off.y * (cs / 2), cs / 2, cs / 2), Color.BLACK, false, 1.0)
 
