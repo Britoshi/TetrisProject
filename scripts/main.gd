@@ -44,6 +44,7 @@ func _ready() -> void:
 	_setup_input_actions()
 	print("  input actions set up")
 	_update_layout()
+	get_viewport().size_changed.connect(_update_layout)
 	piece_data = get_node_or_null("/root/PieceData")
 	print("  piece_data autoload: ", piece_data)
 	if piece_data == null:
@@ -102,11 +103,6 @@ func _update_layout() -> void:
 	_board_x = layout.board_x
 	_board_y = layout.board_y
 	_font_scale = layout.font_scale
-
-
-func _notification(what: int) -> void:
-	if what == NOTIFICATION_RESIZED:
-		_update_layout()
 
 
 # ── Spawning ──

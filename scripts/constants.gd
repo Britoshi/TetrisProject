@@ -78,43 +78,43 @@ const SCORE_HARD_DROP: int = 2  # per cell
 # ── Lines per level ──
 const LINES_PER_LEVEL: int = 10
 
-# ── Render ──
+# ── Render (defaults; use calculate_layout() for screen-scaled values) ──
 const CELL_SIZE: int = 32
 const BOARD_X: int = 100  # pixel offset from left
 const BOARD_Y: int = 20   # pixel offset from top
 
 
-	# ── Layout calculator (call from any Node with a viewport) ──
-	static func calculate_layout(viewport_size: Vector2) -> Dictionary:
-		"""
-		Returns scaled layout values for the given viewport size.
-		Keys: cell_size, board_x, board_y, font_scale, button_max_w
-		"""
-		var vw: float = viewport_size.x
-		var vh: float = viewport_size.y
+# ── Layout calculator (call from any Node with a viewport) ──
+static func calculate_layout(viewport_size: Vector2) -> Dictionary:
+	"""
+	Returns scaled layout values for the given viewport size.
+	Keys: cell_size, board_x, board_y, font_scale, button_max_w
+	"""
+	var vw: float = viewport_size.x
+	var vh: float = viewport_size.y
 
-		# Reserve bottom portion for mobile buttons
-		var button_area_h: float = maxf(vh * 0.25, 140.0)
-		var board_area_h: float = vh - button_area_h
+	# Reserve bottom portion for mobile buttons
+	var button_area_h: float = maxf(vh * 0.25, 140.0)
+	var board_area_h: float = vh - button_area_h
 
-		# Fit board in available space with 5% margin
-		var margin: float = 0.05
-		var cell_w: int = int((vw * (1.0 - margin * 2)) / COLS)
-		var cell_h: int = int((board_area_h * (1.0 - margin)) / VISIBLE_ROWS)
-		var cell_size: int = maxi(8, mini(cell_w, cell_h))
+	# Fit board in available space with 5% margin
+	var margin: float = 0.05
+	var cell_w: int = int((vw * (1.0 - margin * 2)) / COLS)
+	var cell_h: int = int((board_area_h * (1.0 - margin)) / VISIBLE_ROWS)
+	var cell_size: int = maxi(8, mini(cell_w, cell_h))
 
-		var board_px_w: int = cell_size * COLS
-		var board_px_h: int = cell_size * VISIBLE_ROWS
-		var board_x: int = int((vw - board_px_w) / 2.0)
-		var board_y: int = int((board_area_h - board_px_h) / 2.0)
+	var board_px_w: int = cell_size * COLS
+	var board_px_h: int = cell_size * VISIBLE_ROWS
+	var board_x: int = int((vw - board_px_w) / 2.0)
+	var board_y: int = int((board_area_h - board_px_h) / 2.0)
 
-		var font_scale: float = cell_size / 32.0  # relative to default 32px cell
-		var button_max_w: float = minf(vw / 3.5, 180.0)
+	var font_scale: float = cell_size / 32.0  # relative to default 32px cell
+	var button_max_w: float = minf(vw / 3.5, 180.0)
 
-		return {
-			"cell_size": cell_size,
-			"board_x": board_x,
-			"board_y": board_y,
-			"font_scale": font_scale,
-			"button_max_w": button_max_w,
-		}
+	return {
+		"cell_size": cell_size,
+		"board_x": board_x,
+		"board_y": board_y,
+		"font_scale": font_scale,
+		"button_max_w": button_max_w,
+	}

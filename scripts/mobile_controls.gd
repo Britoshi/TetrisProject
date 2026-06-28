@@ -64,6 +64,7 @@ var _dragging: int = -1                 # button index being dragged, -1 = none
 var _drag_offset: Vector2               # offset from touch to button origin
 var _font_size: int = FONT_SIZE
 var _btn_size_mult: float = 1.0          # user-adjustable button size multiplier
+var _config_loaded: bool = false         # true when positions came from saved config
 
 # ── Touch tracking (NORMAL mode) ──
 var _touch_map: Dictionary = {}         # event.index → button index
@@ -98,10 +99,12 @@ func _ready() -> void:
 
 
 func _on_resized() -> void:
-	if _mode == Mode.NORMAL:
-		_layout_default()
-	elif _mode == Mode.EDIT:
-		# Re-layout in edit mode too so buttons stay on screen
+	if _config_loaded:
+		# User has custom positions — don't overwrite on resize
+		queue_redraw()
+		return
+	# Default layout — recompute to fit new screen size
+	if _mode == Mode.NORMAL or _mode == Mode.EDIT:
 		_layout_default()
 	else:
 		queue_redraw()
@@ -611,6 +614,7 @@ func _load_config() -> bool:
 	_panel_rect = str_to_var(cfg.get_value("layout", "panel_rect", ""))
 	_btn_size_mult = cfg.get_value("layout", "btn_size_mult", 1.0)
 	_font_size = maxi(10, int(_btn_rects[0].size.y * 0.4)) if _btn_rects.size() > 0 else FONT_SIZE
+	_config_loaded = true
 	return true
 
 
@@ -620,6 +624,7 @@ func _reset_to_defaults() -> void:
 	_btn_labels.clear()
 	_btn_colors.clear()
 	_btn_size_mult = 1.0
+	_config_loaded = false
 	for def in DEFAULT_BUTTONS:
 		_btn_labels.append(def[0])
 		_btn_actions.append(def[1])
