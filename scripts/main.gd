@@ -125,14 +125,11 @@ func _spawn_next_piece() -> void:
 	else:
 		state = State.PLAYING
 		gravity_acc = 0.0
-	_held_piece_type = Constants.PieceType.EMPTY
-	_hold_used_this_drop = false
-	_hold_locked = false
 		controller.lock_timer = 0.0
 		controller.lock_resets = 0
-		print("  spawn ok — cells:", controller.get_absolute_cells())
 		_hold_used_this_drop = false
 		_hold_locked = false
+		print("  spawn ok — cells:", controller.get_absolute_cells())
 
 
 # ── Main loop ──
@@ -221,10 +218,7 @@ func _process_playing(delta: float) -> void:
 		gravity_acc -= gravity_interval
 		if not _try_gravity():
 			gravity_acc = 0.0
-	_held_piece_type = Constants.PieceType.EMPTY
-	_hold_used_this_drop = false
-	_hold_locked = false
-			break
+				break
 
 	# ── Lock delay ──
 	if controller.is_on_ground() and not controller.is_locked:
@@ -265,9 +259,6 @@ func _try_soft_drop(delta: float) -> void:
 	if controller.move_down():
 		score += Constants.SCORE_SOFT_DROP
 		gravity_acc = 0.0
-	_held_piece_type = Constants.PieceType.EMPTY
-	_hold_used_this_drop = false
-	_hold_locked = false
 
 
 func _try_rotate_cw() -> void:
@@ -359,8 +350,6 @@ func _restart() -> void:
 	level = 1
 	gravity_acc = 0.0
 	_held_piece_type = Constants.PieceType.EMPTY
-	_hold_used_this_drop = false
-	_hold_locked = false
 	_spawn_next_piece()
 	state = State.PLAYING
 
