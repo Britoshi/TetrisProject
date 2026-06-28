@@ -12,7 +12,7 @@ extends Control
 
 # ── Layout constants ──
 const ROWS: int = 2
-const COLS: int = 3
+const COLS: int = 4
 const GAP: float = 10.0
 const BOTTOM_MARGIN: float = 20.0
 const PANEL_PADDING: float = 14.0
@@ -34,6 +34,7 @@ const DEFAULT_BUTTONS: Array = [
 	["▼",  "tetris_soft_drop",    Color(0.50, 0.27, 0.22, 1.0)],
 	["⬇",  "tetris_hard_drop",    Color(0.60, 0.15, 0.18, 1.0)],
 	["↺",  "tetris_rotate_ccw",   Color(0.22, 0.48, 0.28, 1.0)],
+	["H",  "tetris_hold",         Color(0.40, 0.35, 0.20, 1.0)],
 ]
 
 # ── Per-button runtime state ──
@@ -412,6 +413,7 @@ func _action_short_name(action: String) -> String:
 		"tetris_hard_drop":   return "HARD"
 		"tetris_rotate_cw":   return "R-CW"
 		"tetris_rotate_ccw":  return "R-CCW"
+		"tetris_hold":        return "HOLD"
 		_:                    return action
 
 
@@ -613,6 +615,16 @@ func _load_config() -> bool:
 
 	_panel_rect = str_to_var(cfg.get_value("layout", "panel_rect", ""))
 	_btn_size_mult = cfg.get_value("layout", "btn_size_mult", 1.0)
+
+	# Migrate old configs (6 buttons → 7)
+	if _btn_rects.size() == 6:
+		# Add default hold button positioned to the right of the 3rd button on row 1
+		var ref_r: Rect2 = _btn_rects[2]  # 3rd button (rotate_cw)
+		var new_r := Rect2(ref_r.end.x + GAP, ref_r.position.y, ref_r.size.x, ref_r.size.y)
+		_btn_rects.append(new_r)
+		_btn_actions.append("tetris_hold")
+		_btn_labels.append("H")
+		_btn_colors.append(Color(0.40, 0.35, 0.20, 1.0))
 	_font_size = maxi(10, int(_btn_rects[0].size.y * 0.4)) if _btn_rects.size() > 0 else FONT_SIZE
 	_config_loaded = true
 	return true

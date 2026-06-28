@@ -17,6 +17,11 @@ var score: int = 0
 var lines_cleared: int = 0
 var level: int = 1
 
+# ── Hold (stash) ──
+var _held_piece_type: int = Constants.PieceType.EMPTY
+var _hold_used_this_drop: bool = false
+var _hold_locked: bool = false    # true after hold; cleared on next spawn
+
 # ── Timers (accumulated in _process) ──
 var gravity_acc: float = 0.0
 
@@ -87,6 +92,10 @@ func _setup_input_actions() -> void:
 	_create_input_event("tetris_rotate_ccw", KEY_Z)
 	_create_input_event("tetris_rotate_ccw", KEY_CTRL)
 
+	InputMap.add_action("tetris_hold")
+	_create_input_event("tetris_hold", KEY_C)
+	_create_input_event("tetris_hold", KEY_SHIFT)
+
 
 func _create_input_event(action: String, keycode: int) -> void:
 	var ev := InputEventKey.new()
@@ -116,9 +125,14 @@ func _spawn_next_piece() -> void:
 	else:
 		state = State.PLAYING
 		gravity_acc = 0.0
+	_held_piece_type = Constants.PieceType.EMPTY
+	_hold_used_this_drop = false
+	_hold_locked = false
 		controller.lock_timer = 0.0
 		controller.lock_resets = 0
 		print("  spawn ok — cells:", controller.get_absolute_cells())
+		_hold_used_this_drop = false
+		_hold_locked = false
 
 
 # ── Main loop ──
@@ -163,6 +177,9 @@ func _process_playing(delta: float) -> void:
 	if Input.is_action_just_pressed("tetris_rotate_ccw"):
 		_try_rotate_ccw()
 
+	if Input.is_action_just_pressed("tetris_hold"):
+		_try_hold()
+
 	# DAS left
 	if Input.is_action_pressed("tetris_move_left"):
 		if not das_left_active:
@@ -204,6 +221,9 @@ func _process_playing(delta: float) -> void:
 		gravity_acc -= gravity_interval
 		if not _try_gravity():
 			gravity_acc = 0.0
+	_held_piece_type = Constants.PieceType.EMPTY
+	_hold_used_this_drop = false
+	_hold_locked = false
 			break
 
 	# ── Lock delay ──
@@ -223,6 +243,7 @@ func _process_line_clear(delta: float) -> void:
 
 
 func _process_game_over(_delta: float) -> void:
+	# Also restarts on hard drop / mobile hard-drop button
 	if Input.is_action_just_pressed("tetris_hard_drop"):
 		_restart()
 
@@ -244,6 +265,9 @@ func _try_soft_drop(delta: float) -> void:
 	if controller.move_down():
 		score += Constants.SCORE_SOFT_DROP
 		gravity_acc = 0.0
+	_held_piece_type = Constants.PieceType.EMPTY
+	_hold_used_this_drop = false
+	_hold_locked = false
 
 
 func _try_rotate_cw() -> void:
@@ -260,6 +284,23 @@ func _try_rotate_ccw() -> void:
 			board.last_move_was_rotation = true
 
 
+
+func _try_hold() -> void:
+	if _hold_locked:
+		return
+	var current_type: int = controller.piece_type
+	if _held_piece_type == Constants.PieceType.EMPTY:
+		# First hold — store current, spawn next
+		_held_piece_type = current_type
+		_hold_locked = true
+		_spawn_next_piece()
+	else:
+		# Swap held with current
+		var swap_type: int = _held_piece_type
+		_held_piece_type = current_type
+		_hold_locked = true
+		if not controller.spawn(swap_type):
+			state = State.GAME_OVER
 func _try_gravity() -> bool:
 	return controller.move_down()
 
@@ -317,6 +358,9 @@ func _restart() -> void:
 	lines_cleared = 0
 	level = 1
 	gravity_acc = 0.0
+	_held_piece_type = Constants.PieceType.EMPTY
+	_hold_used_this_drop = false
+	_hold_locked = false
 	_spawn_next_piece()
 	state = State.PLAYING
 
@@ -415,8 +459,14 @@ func _draw() -> void:
 	if state == State.GAME_OVER:
 		draw_rect(Rect2(bx - 2, by - 2, board_width + 4, board_height + 4), Color.RED, false, 3.0)
 		var font = ThemeDB.fallback_font
-		draw_string(font, Vector2(bx + margin, by + board_height / 2), "GAME OVER",
-			HORIZONTAL_ALIGNMENT_LEFT, -1, font_l, Color.RED)
+		var go_text := "GAME OVER"
+		var go_size := font.get_string_size(go_text, HORIZONTAL_ALIGNMENT_CENTER, -1, font_l)
+		draw_string(font, Vector2(bx + (board_width - go_size.x) / 2.0, by + board_height / 2 - go_size.y),
+			go_text, HORIZONTAL_ALIGNMENT_LEFT, -1, font_l, Color.RED)
+		var restart_text := "Tap ⬇ to Restart"
+		var restart_size := font.get_string_size(restart_text, HORIZONTAL_ALIGNMENT_CENTER, -1, font_m)
+		draw_string(font, Vector2(bx + (board_width - restart_size.x) / 2.0, by + board_height / 2 + 10),
+			restart_text, HORIZONTAL_ALIGNMENT_LEFT, -1, font_m, Color(1.0, 1.0, 1.0, 0.7))
 
 	# Score display
 	var font = ThemeDB.fallback_font
@@ -427,6 +477,25 @@ func _draw() -> void:
 		"Lines: %d" % lines_cleared, HORIZONTAL_ALIGNMENT_LEFT, -1, font_m)
 	draw_string(font, Vector2(right_x, by + cs + (font_m + 6) * 2),
 		"Level: %d" % level, HORIZONTAL_ALIGNMENT_LEFT, -1, font_m)
+
+	# Hold piece display
+	var hold_x: int = bx - cs * 2 - margin
+	if hold_x < 0:
+		hold_x = margin
+	var hold_label := "Hold"
+	var font2 = ThemeDB.fallback_font
+	draw_string(font2, Vector2(hold_x, by + cs), hold_label,
+		HORIZONTAL_ALIGNMENT_LEFT, -1, font_s)
+	if _held_piece_type != Constants.PieceType.EMPTY:
+		var hold_color = Constants.COLORS.get(_held_piece_type, Color.GRAY)
+		if _hold_locked:
+			hold_color.a = 0.35
+		var hold_offsets = piece_data.CELLS[_held_piece_type][0]
+		var hy: int = by + cs + font_s + margin
+		for off in hold_offsets:
+			var hpx: int = hold_x + off.x * (cs / 2)
+			draw_rect(Rect2(hpx, hy + off.y * (cs / 2), cs / 2, cs / 2), hold_color)
+			draw_rect(Rect2(hpx, hy + off.y * (cs / 2), cs / 2, cs / 2), Color.BLACK, false, 1.0)
 
 	# Next piece preview
 	if state != State.GAME_OVER:
