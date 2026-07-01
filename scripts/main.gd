@@ -177,6 +177,10 @@ func _process_playing(delta: float) -> void:
 	if Input.is_action_just_pressed("tetris_hold"):
 		_try_hold()
 
+	if Input.is_action_just_pressed("tetris_restart"):
+		_restart()
+		return
+
 	# DAS left
 	if Input.is_action_pressed("tetris_move_left"):
 		if not das_left_active:
@@ -218,7 +222,7 @@ func _process_playing(delta: float) -> void:
 		gravity_acc -= gravity_interval
 		if not _try_gravity():
 			gravity_acc = 0.0
-				break
+			break
 
 	# ── Lock delay ──
 	if controller.is_on_ground() and not controller.is_locked:
@@ -238,7 +242,7 @@ func _process_line_clear(delta: float) -> void:
 
 func _process_game_over(_delta: float) -> void:
 	# Also restarts on hard drop / mobile hard-drop button
-	if Input.is_action_just_pressed("tetris_hard_drop"):
+	if Input.is_action_just_pressed("tetris_hard_drop") or Input.is_action_just_pressed("tetris_restart"):
 		_restart()
 
 

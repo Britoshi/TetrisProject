@@ -35,6 +35,7 @@ const DEFAULT_BUTTONS: Array = [
 	["⬇",  "tetris_hard_drop",    Color(0.60, 0.15, 0.18, 1.0)],
 	["↺",  "tetris_rotate_ccw",   Color(0.22, 0.48, 0.28, 1.0)],
 	["H",  "tetris_hold",         Color(0.40, 0.35, 0.20, 1.0)],
+	["R", "tetris_restart",      Color(0.50, 0.22, 0.22, 1.0)],
 ]
 
 # ── Per-button runtime state ──
@@ -414,6 +415,7 @@ func _action_short_name(action: String) -> String:
 		"tetris_rotate_cw":   return "R-CW"
 		"tetris_rotate_ccw":  return "R-CCW"
 		"tetris_hold":        return "HOLD"
+		"tetris_restart":    return "RESTART"
 		_:                    return action
 
 
@@ -625,6 +627,13 @@ func _load_config() -> bool:
 		_btn_actions.append("tetris_hold")
 		_btn_labels.append("H")
 		_btn_colors.append(Color(0.40, 0.35, 0.20, 1.0))
+		# Also add default restart button
+		var ref_r2: Rect2 = _btn_rects[1]  # right button
+		var new_r2 := Rect2(ref_r2.end.x + ref_r2.size.x + GAP if _btn_rects.size() >= 7 else ref_r2.end.x + GAP, new_r.position.y, new_r.size.x, new_r.size.y)
+		_btn_rects.append(new_r2)
+		_btn_actions.append("tetris_restart")
+		_btn_labels.append("R")
+		_btn_colors.append(Color(0.50, 0.22, 0.22, 1.0))
 	_font_size = maxi(10, int(_btn_rects[0].size.y * 0.4)) if _btn_rects.size() > 0 else FONT_SIZE
 	_config_loaded = true
 	return true
