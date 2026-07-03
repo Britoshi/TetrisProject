@@ -202,7 +202,7 @@ func _draw_buttons(dimmed: bool) -> void:
 	draw_rect(_panel_rect, bg_color, true)
 	draw_rect(_panel_rect, Color(1.0, 1.0, 1.0, 0.08 * alpha_mod), false, 1.0)
 
-	for i in range(_btn_rects.size()):
+	for i in range(min(_btn_rects.size(), _btn_colors.size())):
 		var r := _btn_rects[i]
 		var base := _btn_colors[i]
 		base.a *= alpha_mod
@@ -651,22 +651,10 @@ func _load_config() -> bool:
 	_btn_size_mult = cfg.get_value("layout", "btn_size_mult", 1.0)
 	_btn_aspect = cfg.get_value("layout", "btn_aspect", BTN_ASPECT_DEFAULT)
 
-	# Migrate old configs (6 buttons → 7)
-	if _btn_rects.size() == 6:
-		# Add default hold button positioned to the right of the 3rd button on row 1
-		var ref_r: Rect2 = _btn_rects[2]  # 3rd button (rotate_cw)
-		var new_r := Rect2(ref_r.end.x + GAP, ref_r.position.y, ref_r.size.x, ref_r.size.y)
-		_btn_rects.append(new_r)
-		_btn_actions.append("tetris_hold")
-		_btn_labels.append("H")
-		_btn_colors.append(Color(0.40, 0.35, 0.20, 1.0))
-		# Also add default restart button
-		var ref_r2: Rect2 = _btn_rects[1]  # right button
-		var new_r2 := Rect2(ref_r2.end.x + ref_r2.size.x + GAP if _btn_rects.size() >= 7 else ref_r2.end.x + GAP, new_r.position.y, new_r.size.x, new_r.size.y)
-		_btn_rects.append(new_r2)
-		_btn_actions.append("tetris_restart")
-		_btn_labels.append("R")
-		_btn_colors.append(Color(0.50, 0.22, 0.22, 1.0))
+	# If old config has wrong number of buttons, discard and use defaults
+	if _btn_rects.size() != DEFAULT_BUTTONS.size():
+		_reset_to_defaults()
+		return false
 	_font_size = maxi(10, int(_btn_rects[0].size.y * 0.4)) if _btn_rects.size() > 0 else FONT_SIZE
 	_config_loaded = true
 	return true
