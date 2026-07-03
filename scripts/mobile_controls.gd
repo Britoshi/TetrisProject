@@ -16,7 +16,7 @@ const COLS: int = 4
 const GAP: float = 10.0
 const BOTTOM_MARGIN: float = 20.0
 const PANEL_PADDING: float = 14.0
-const BTN_ASPECT: float = 0.65
+const BTN_ASPECT_DEFAULT: float = 0.65
 const FONT_SIZE: int = 28
 const GEAR_SIZE: float = 44.0
 const BTN_SIZE_MIN: float = 0.5
@@ -58,6 +58,8 @@ var _settings_reset_rect: Rect2
 var _settings_close_rect: Rect2
 var _settings_size_minus_rect: Rect2
 var _settings_size_plus_rect: Rect2
+var _settings_aspect_minus_rect: Rect2
+var _settings_aspect_plus_rect: Rect2
 
 # ── Edit mode ──
 var _done_rect: Rect2                   # "Done" button in edit mode
@@ -66,6 +68,7 @@ var _dragging: int = -1                 # button index being dragged, -1 = none
 var _drag_offset: Vector2               # offset from touch to button origin
 var _font_size: int = FONT_SIZE
 var _btn_size_mult: float = 1.0          # user-adjustable button size multiplier
+var _btn_aspect: float = BTN_ASPECT_DEFAULT  # button height/width ratio
 var _config_loaded: bool = false         # true when positions came from saved config
 
 # ── Touch tracking (NORMAL mode) ──
@@ -125,7 +128,7 @@ func _layout_default() -> void:
 	var layout := Constants.calculate_layout(size)
 	var max_w: float = layout.button_max_w * _btn_size_mult
 	var btn_w: float = minf((size.x - GAP * (COLS + 1)) / COLS, max_w)
-	var btn_h: float = btn_w * BTN_ASPECT
+	var btn_h: float = btn_w * _btn_aspect
 	var total_w: float = btn_w * COLS + GAP * (COLS - 1)
 	var total_h: float = btn_h * ROWS + GAP * (ROWS - 1)
 	var start_x: float = (size.x - total_w) / 2.0
@@ -229,7 +232,7 @@ func _draw_settings_overlay() -> void:
 
 	# Panel
 	var pw: float = minf(size.x * 0.75, 340.0)
-	var ph: float = 260.0
+	var ph: float = 320.0
 	var px: float = (size.x - pw) / 2.0
 	var py: float = (size.y - ph) / 2.0
 	_settings_panel_bg = Rect2(px, py, pw, ph)
@@ -275,6 +278,20 @@ func _draw_settings_overlay() -> void:
 
 	_settings_size_plus_rect = Rect2(_settings_size_minus_rect.end.x + 5, y, size_btn_w, row_h)
 	_draw_panel_button(_settings_size_plus_rect, "+", font, fs, btn_color)
+	y += row_h + 10.0
+
+	# Button aspect ratio row
+	var aspect_label := "Btn Shape: %.0f%%" % (_btn_aspect * 100.0)
+	var aspect_lbl_w := btn_w * 0.45
+	var aspect_lbl_rect := Rect2(px + btn_margin, y, aspect_lbl_w, row_h)
+	_draw_panel_button(aspect_lbl_rect, aspect_label, font, fs, btn_color)
+
+	var aspect_btn_w := (btn_w - aspect_lbl_w - 10) / 2.0
+	_settings_aspect_minus_rect = Rect2(px + btn_margin + aspect_lbl_w + 10, y, aspect_btn_w, row_h)
+	_draw_panel_button(_settings_aspect_minus_rect, "-", font, fs, btn_color)
+
+	_settings_aspect_plus_rect = Rect2(_settings_aspect_minus_rect.end.x + 5, y, aspect_btn_w, row_h)
+	_draw_panel_button(_settings_aspect_plus_rect, "+", font, fs, btn_color)
 	y += row_h + 10.0
 
 	# "Close" button
@@ -502,6 +519,20 @@ func _touch_settings(pos: Vector2, pressed: bool) -> void:
 		queue_redraw()
 		return
 
+	# Button aspect -
+	if _settings_aspect_minus_rect.has_point(pos):
+		_btn_aspect = clampf(_btn_aspect - 0.05, 0.3, 1.2)
+		_layout_default()
+		queue_redraw()
+		return
+
+	# Button aspect +
+	if _settings_aspect_plus_rect.has_point(pos):
+		_btn_aspect = clampf(_btn_aspect + 0.05, 0.3, 1.2)
+		_layout_default()
+		queue_redraw()
+		return
+
 	# Tap outside panel → close
 	if not _settings_panel_bg.has_point(pos):
 		_mode = Mode.NORMAL
@@ -584,6 +615,7 @@ func _save_config() -> void:
 	cfg.set_value("layout", "button_count", _btn_rects.size())
 	cfg.set_value("layout", "panel_rect", var_to_str(_panel_rect))
 	cfg.set_value("layout", "btn_size_mult", _btn_size_mult)
+	cfg.set_value("layout", "btn_aspect", _btn_aspect)
 	for i in range(_btn_rects.size()):
 		var section := "button_%d" % i
 		cfg.set_value(section, "action", _btn_actions[i])
@@ -617,6 +649,7 @@ func _load_config() -> bool:
 
 	_panel_rect = str_to_var(cfg.get_value("layout", "panel_rect", ""))
 	_btn_size_mult = cfg.get_value("layout", "btn_size_mult", 1.0)
+	_btn_aspect = cfg.get_value("layout", "btn_aspect", BTN_ASPECT_DEFAULT)
 
 	# Migrate old configs (6 buttons → 7)
 	if _btn_rects.size() == 6:
@@ -645,6 +678,7 @@ func _reset_to_defaults() -> void:
 	_btn_labels.clear()
 	_btn_colors.clear()
 	_btn_size_mult = 1.0
+	_btn_aspect = BTN_ASPECT_DEFAULT
 	_config_loaded = false
 	for def in DEFAULT_BUTTONS:
 		_btn_labels.append(def[0])
