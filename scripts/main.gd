@@ -66,36 +66,43 @@ func _ready() -> void:
 
 
 func _setup_input_actions() -> void:
-	if InputMap.has_action("tetris_move_left"):
+	# Only set up once
+	if InputMap.has_action("tetris_move_left") and InputMap.has_action("tetris_restart"):
 		return
 
-	InputMap.add_action("tetris_move_left")
+	_add_action_if_missing("tetris_move_left")
 	_create_input_event("tetris_move_left", KEY_LEFT)
 	_create_input_event("tetris_move_left", KEY_A)
 
-	InputMap.add_action("tetris_move_right")
+	_add_action_if_missing("tetris_move_right")
 	_create_input_event("tetris_move_right", KEY_RIGHT)
 	_create_input_event("tetris_move_right", KEY_D)
 
-	InputMap.add_action("tetris_soft_drop")
+	_add_action_if_missing("tetris_soft_drop")
 	_create_input_event("tetris_soft_drop", KEY_DOWN)
 	_create_input_event("tetris_soft_drop", KEY_S)
 
-	InputMap.add_action("tetris_hard_drop")
+	_add_action_if_missing("tetris_hard_drop")
 	_create_input_event("tetris_hard_drop", KEY_SPACE)
 
-	InputMap.add_action("tetris_rotate_cw")
+	_add_action_if_missing("tetris_rotate_cw")
 	_create_input_event("tetris_rotate_cw", KEY_X)
 	_create_input_event("tetris_rotate_cw", KEY_UP)
 
-	InputMap.add_action("tetris_rotate_ccw")
+	_add_action_if_missing("tetris_rotate_ccw")
 	_create_input_event("tetris_rotate_ccw", KEY_Z)
 	_create_input_event("tetris_rotate_ccw", KEY_CTRL)
 
-	InputMap.add_action("tetris_hold")
+	_add_action_if_missing("tetris_hold")
 	_create_input_event("tetris_hold", KEY_C)
 	_create_input_event("tetris_hold", KEY_SHIFT)
 
+	_add_action_if_missing("tetris_restart")
+	_create_input_event("tetris_restart", KEY_R)
+
+func _add_action_if_missing(action: String) -> void:
+	if not InputMap.has_action(action):
+		InputMap.add_action(action)
 
 func _create_input_event(action: String, keycode: int) -> void:
 	var ev := InputEventKey.new()
