@@ -651,8 +651,8 @@ func _load_config() -> bool:
 	_btn_size_mult = cfg.get_value("layout", "btn_size_mult", 1.0)
 	_btn_aspect = cfg.get_value("layout", "btn_aspect", BTN_ASPECT_DEFAULT)
 
-	# If old config has wrong number of buttons, discard and use defaults
-	if _btn_rects.size() != DEFAULT_BUTTONS.size():
+	# Discard configs that don't match current button count
+	if _btn_rects.size() != DEFAULT_BUTTONS.size() or _btn_actions.size() != DEFAULT_BUTTONS.size() or _btn_labels.size() != DEFAULT_BUTTONS.size() or _btn_colors.size() != DEFAULT_BUTTONS.size():
 		_reset_to_defaults()
 		return false
 	_font_size = maxi(10, int(_btn_rects[0].size.y * 0.4)) if _btn_rects.size() > 0 else FONT_SIZE
@@ -661,15 +661,18 @@ func _load_config() -> bool:
 
 
 func _reset_to_defaults() -> void:
+	# Delete saved config so stale data doesn't come back
+	DirAccess.remove_absolute(SAVE_PATH)
+	# Rebuild all arrays from defaults
 	_btn_rects.clear()
 	_btn_actions.clear()
 	_btn_labels.clear()
 	_btn_colors.clear()
-	_btn_size_mult = 1.0
-	_btn_aspect = BTN_ASPECT_DEFAULT
-	_config_loaded = false
 	for def in DEFAULT_BUTTONS:
 		_btn_labels.append(def[0])
 		_btn_actions.append(def[1])
 		_btn_colors.append(def[2])
+	_btn_size_mult = 1.0
+	_btn_aspect = BTN_ASPECT_DEFAULT
+	_config_loaded = false
 	_layout_default()
