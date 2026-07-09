@@ -304,6 +304,10 @@ func _bake_board_bg() -> void:
 	var base_h := clampi(int(vp_size.y / 3.0), 64, 1024)
 	var base_w := maxi(2, int(round(base_h * vp_size.x / vp_size.y)))
 	img.resize(base_w, base_h, Image.INTERPOLATE_LANCZOS)
+	# HDR 2D renders in linear space. Imported textures get sRGB->linear
+	# automatically, but runtime ImageTextures do NOT — without this the
+	# board shows a double-gamma washed-out (white) background.
+	img.srgb_to_linear()
 	img.generate_mipmaps()
 
 	_board_material.set_shader_parameter("bg_tex", ImageTexture.create_from_image(img))
