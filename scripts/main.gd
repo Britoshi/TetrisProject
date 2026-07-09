@@ -343,23 +343,20 @@ func _create_board_node() -> void:
 	# ── Pre-blurred background for the glass (baked on CPU, renderer-proof) ──
 	_bake_board_bg()
 
-	# Glass optics (pixel-space; bevel/thickness set per-layout in _position_all_nodes)
-	_board_material.set_shader_parameter("ior", 1.45)
-	_board_material.set_shader_parameter("dispersion", 0.04)
-	_board_material.set_shader_parameter("frost_lod", 1.8)
-	_board_material.set_shader_parameter("dome", 0.05)
+	# Glass uniforms — same values/pipeline as the liquid glass buttons
+	_board_material.set_shader_parameter("blur_amount", 2.5)
+	_board_material.set_shader_parameter("warp_intensity", 0.25)
+	_board_material.set_shader_parameter("warp_strength", 10.0)
+	_board_material.set_shader_parameter("chromatic_strength", 3.0)
+	_board_material.set_shader_parameter("border_width", 1.5)
+	_board_material.set_shader_parameter("border_color", Color(1.0, 1.0, 1.0, 0.45))
+	_board_material.set_shader_parameter("rim_intensity", 0.5)
+	_board_material.set_shader_parameter("sheen_intensity", 0.10)
+	_board_material.set_shader_parameter("sheen_falloff", 0.4)
+	_board_material.set_shader_parameter("glass_tint", Color(0.06, 0.08, 0.14, 0.15))
 	_board_material.set_shader_parameter("wave_strength", 0.3)
 	_board_material.set_shader_parameter("wave_speed", 1.0)
 	_board_material.set_shader_parameter("wave_scale", 1.0)
-	_board_material.set_shader_parameter("glint_intensity", 0.5)
-	_board_material.set_shader_parameter("saturation", 1.35)
-	_board_material.set_shader_parameter("brightness", 1.06)
-	_board_material.set_shader_parameter("spec_intensity", 1.0)
-	_board_material.set_shader_parameter("rim_width_px", 2.0)
-	_board_material.set_shader_parameter("sheen_intensity", 0.05)
-	_board_material.set_shader_parameter("sheen_falloff", 0.35)
-	_board_material.set_shader_parameter("glass_tint", Color(0.06, 0.08, 0.14, 0.15))
-	_board_material.set_shader_parameter("rim_color", Color(1.0, 1.0, 1.0, 0.8))
 
 	# Colors from Constants.COLORS
 	var c := Constants.COLORS
@@ -776,8 +773,6 @@ func _position_all_nodes() -> void:
 	if _board_material:
 		_board_material.set_shader_parameter("rect_size", Vector2(board_w, board_h))
 		_board_material.set_shader_parameter("corner_radius_px", cs * 0.8)
-		_board_material.set_shader_parameter("bevel_px", cs * 2.0)
-		_board_material.set_shader_parameter("thickness_px", cs * 2.6)
 		_board_material.set_shader_parameter("hole_bevel_px", cs * 0.9)
 		if _bg_bake_size != get_viewport_rect().size:
 			_bake_board_bg()

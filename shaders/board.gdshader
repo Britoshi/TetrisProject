@@ -1,79 +1,72 @@
 shader_type canvas_item;
 
-// board.gdshader — Liquid glass board panel (physically-flavored).
+// board.gdshader — Liquid glass board, SAME FX pipeline as the buttons
+// (liquid_glass.gdshader): Gaussian edge warp, textureLod blur,
+// chromatic aberration, rim light, border stroke, top sheen.
 //
-// The board is modeled as a thick glass slab with a circular beveled rim.
-// Per-fragment we build the slab's surface normal from the squircle SDF
-// gradient, then refract the view ray through it (Snell, IOR ~1.45) with
-// per-channel dispersion. The refracted ray is projected onto the
-// background plane, so the rim genuinely bends and magnifies what's
-// behind it — the signature Liquid Glass rolled edge. Speculars come
-// from a top-left key light and a weaker bottom-right counter glint.
-//
-// All distances are in PIXELS (rect_size uniform).
-// bg_tex is a pre-blurred, cover-fitted copy of the screen background
-// baked on the CPU (main.gd _bake_board_bg), sampled at SCREEN_UV.
+// Differences from the button (only where they must differ):
+//  - The SDF is the union of the outer rounded rect AND the locked
+//    stack contour (blocks are walls), read from board_tex.
+//  - bg_tex is a pre-baked mipmapped copy of the background sampled at
+//    SCREEN_UV (screen_texture doesn't work reliably on this platform).
+//  - Water waves + piece-lock splash ripples add to warp_offset the
+//    same way the button's wobble/ripple effects do.
+//  - Ghost drop preview is a see-through tinted cutout.
 
 uniform sampler2D board_tex : repeat_disable, filter_nearest;
 uniform sampler2D bg_tex : repeat_disable, filter_linear_mipmap;
 
-// Geometry (pixels)
+// ── Shape (pixels) ──
 uniform vec2 rect_size = vec2(320.0, 640.0);
 uniform float corner_radius_px = 26.0;
 
-// Grid
+// ── Grid ──
 uniform vec2 cell_count = vec2(10.0, 20.0);
 uniform float vanish_offset = 2.0;
 uniform float cell_padding : hint_range(0.0, 0.2) = 0.04;
 
-// Glass optics
-uniform float bevel_px : hint_range(1.0, 300.0) = 70.0;      // rolled-edge lens width (ALL walls)
-uniform float thickness_px : hint_range(0.0, 400.0) = 90.0;  // slab thickness (refraction throw)
-uniform float ior : hint_range(1.0, 2.0) = 1.45;
-uniform float dispersion : hint_range(0.0, 0.2) = 0.04;      // per-channel IOR spread
-uniform float frost_lod : hint_range(0.0, 6.0) = 1.8;        // interior frost (mip level)
-uniform float dome : hint_range(0.0, 0.3) = 0.05;            // gentle whole-slab lens curvature
-uniform float wave_strength : hint_range(0.0, 0.8) = 0.3;    // water surface tilt amplitude
-uniform float wave_speed : hint_range(0.0, 4.0) = 1.0;
-uniform float wave_scale : hint_range(0.2, 5.0) = 1.0;       // spatial frequency multiplier
-uniform float glint_intensity : hint_range(0.0, 2.0) = 0.5;  // sun sparkle off the waves
+// ── Glass body (button-identical) ──
+uniform float blur_amount : hint_range(0.0, 8.0) = 2.5;
+uniform vec4 glass_tint : source_color = vec4(0.06, 0.08, 0.14, 0.15);
+uniform float warp_intensity : hint_range(0.0, 1.0) = 0.25;
+uniform float warp_strength : hint_range(0.0, 30.0) = 10.0;
 
-// Splash ripples (piece locks). The wavefront is an iso-contour of the
-// distance field to the piece's 4 cells, so it starts tetromino-shaped
-// and rounds off as it expands.
+// ── Edge / border (button-identical) ──
+uniform float border_width : hint_range(0.0, 8.0) = 1.5;
+uniform vec4 border_color : source_color = vec4(1.0, 1.0, 1.0, 0.45);
+uniform float rim_intensity : hint_range(0.0, 1.0) = 0.5;
+
+// ── Chromatic aberration (button-identical) ──
+uniform float chromatic_strength : hint_range(0.0, 5.0) = 3.0;
+
+// ── Top specular sheen (button-identical) ──
+uniform float sheen_intensity : hint_range(0.0, 0.5) = 0.10;
+uniform float sheen_falloff : hint_range(0.2, 0.8) = 0.4;
+
+// ── Water waves (add to warp_offset like the button wobble) ──
+uniform float wave_strength : hint_range(0.0, 0.8) = 0.3;
+uniform float wave_speed : hint_range(0.0, 4.0) = 1.0;
+uniform float wave_scale : hint_range(0.2, 5.0) = 1.0;
+
+// ── Splash ripples (piece locks; shaped by the piece's cells) ──
 // meta: x = age s (< 0 inactive), y = amplitude, z = cell half-size px.
-// cells_a: xy = cell0 center, zw = cell1 center (board px, origin at rect center).
-// cells_b: xy = cell2 center, zw = cell3 center.
 uniform vec4 splash_meta[6];
 uniform vec4 splash_cells_a[6];
 uniform vec4 splash_cells_b[6];
 uniform float splash_strength : hint_range(0.0, 2.0) = 0.7;
-uniform float splash_speed_px : hint_range(50.0, 600.0) = 240.0; // ring expansion px/s
+uniform float splash_speed_px : hint_range(50.0, 600.0) = 240.0;
 
-// Ghost hole: the drop-preview footprint is CUT OUT of the glass slab.
-// Fully transparent inside; the glass forms a rolled lens rim around it.
-// cells_a/b: 4 cell centers (board px, origin at rect center).
+// ── Ghost hole (drop preview cutout) ──
 uniform float ghost_active = 0.0;
 uniform vec4 ghost_cells_a = vec4(0.0);
 uniform vec4 ghost_cells_b = vec4(0.0);
-uniform float ghost_half = 12.0;                              // cell half-size minus rounding
-uniform float ghost_round = 4.0;                              // hole corner rounding
-uniform float hole_bevel_px : hint_range(1.0, 200.0) = 34.0;  // lens rim width around the hole
-uniform float hole_tilt : hint_range(0.0, 1.0) = 0.35;        // hole rim refraction strength
-uniform vec4 ghost_color : source_color = vec4(1.0, 1.0, 1.0, 0.28); // piece-color wash over the window
+uniform float ghost_half = 12.0;
+uniform float ghost_round = 4.0;
+uniform float hole_bevel_px : hint_range(1.0, 200.0) = 34.0;
+uniform float hole_tilt : hint_range(0.0, 1.0) = 0.35;
+uniform vec4 ghost_color : source_color = vec4(1.0, 1.0, 1.0, 0.28);
 
-// Locked blocks are walls, exactly like the four container edges: the
-// glass boundary wraps around the stack with the SAME rolled-edge lens.
-uniform float saturation : hint_range(0.5, 2.0) = 1.35;      // vibrancy
-uniform float brightness : hint_range(0.5, 1.5) = 1.06;
-uniform float spec_intensity : hint_range(0.0, 3.0) = 1.0;
-uniform float rim_width_px : hint_range(0.5, 10.0) = 2.0;
-uniform float sheen_intensity : hint_range(0.0, 0.5) = 0.05;
-uniform float sheen_falloff : hint_range(0.1, 1.0) = 0.35;
-uniform vec4 glass_tint : source_color = vec4(0.06, 0.08, 0.14, 0.15);
-uniform vec4 rim_color : source_color = vec4(1.0, 1.0, 1.0, 0.8);
-
-// Piece colors
+// ── Piece colors ──
 uniform vec4 color_1 : source_color = vec4(0.0, 0.88, 0.88, 1.0);
 uniform vec4 color_2 : source_color = vec4(1.0, 0.84, 0.0, 1.0);
 uniform vec4 color_3 : source_color = vec4(0.63, 0.13, 0.94, 1.0);
@@ -82,12 +75,12 @@ uniform vec4 color_5 : source_color = vec4(0.89, 0.1, 0.11, 1.0);
 uniform vec4 color_6 : source_color = vec4(0.0, 0.47, 0.95, 1.0);
 uniform vec4 color_7 : source_color = vec4(1.0, 0.55, 0.0, 1.0);
 
-// Flash
+// ── Flash ──
 uniform vec4 flash_rows = vec4(-1.0);
 uniform float flash_intensity : hint_range(0.0, 1.0) = 0.0;
 
-// Squircle SDF (p, half-size, radius — pixels)
-float board_sdf(vec2 p, vec2 b, float r) {
+// ── Squircle SDF (identical to the button's rounded_box_sdf) ──
+float rounded_box_sdf(vec2 p, vec2 b, float r) {
 	vec2 q = abs(p) - b + r;
 	float d = min(max(q.x, q.y), 0.0);
 	vec2 corner = max(q, vec2(0.0));
@@ -123,7 +116,7 @@ float hole_sdf(vec2 p) {
 	return d - ghost_round;
 }
 
-// Accumulate the signed distance (and its gradient) to one splash cell —
+// Accumulate signed distance (+gradient) to one splash/wall cell —
 // an axis-aligned square of half-size hc. Union via min.
 void cell_sdf(vec2 rel, float hc, inout float sd, inout vec2 sg) {
 	vec2 q = abs(rel) - vec2(hc);
@@ -144,7 +137,7 @@ void cell_sdf(vec2 rel, float hc, inout float sd, inout vec2 sg) {
 }
 
 // Distance (+gradient) from p to the nearest locked block among the
-// 3x3 cells around cell_coord. sd stays huge when no block is near.
+// 3x3 cells around cc0. sd stays huge when no block is near.
 void wall_field(vec2 p, vec2 cc0, out float sd, out vec2 sg) {
 	sd = 1e6;
 	sg = vec2(0.0, 1.0);
@@ -168,68 +161,42 @@ void wall_field(vec2 p, vec2 cc0, out float sd, out vec2 sg) {
 	}
 }
 
-// Refract the straight-down view ray through the slab surface and
-// project it across the glass thickness onto the background plane.
-vec2 refract_offset(vec3 n, float eta) {
-	vec3 rd = refract(vec3(0.0, 0.0, -1.0), n, eta);
-	return rd.xy / max(abs(rd.z), 0.35) * thickness_px;
-}
-
 void fragment() {
-	// ── Shape (pixel space, origin at rect center) ──
+	// ── Pixel space (origin at rect center) ──
 	vec2 half_size = rect_size * 0.5;
 	vec2 px = (UV - 0.5) * rect_size;
 
-	// Slab with the ghost hole cut out: max(board, -hole)
-	float bsdf = board_sdf(px, half_size, corner_radius_px);
-	float hs = hole_sdf(px);
-	float csdf = max(bsdf, -hs);
-
-	// 1.5px anti-aliased outer edge. The hole is NOT discarded — it
-	// renders as a low-alpha piece-color wash over the real background.
-	float board_alpha = 1.0 - smoothstep(-0.75, 0.75, bsdf);
-	if (board_alpha < 0.004)
+	// Outer rounded rect
+	float bsdf = rounded_box_sdf(px, half_size, corner_radius_px);
+	float shape_alpha = 1.0 - smoothstep(-1.0, 1.0, bsdf);
+	if (shape_alpha < 0.001)
 		discard;
 
-	// ── Surface normal of the glass slab ──
-	// The glass boundary = outer rounded rect UNION the locked stack
-	// contour. Every wall gets the IDENTICAL rolled-edge lens.
-	float gx = board_sdf(px + vec2(1.0, 0.0), half_size, corner_radius_px)
-	         - board_sdf(px - vec2(1.0, 0.0), half_size, corner_radius_px);
-	float gy = board_sdf(px + vec2(0.0, 1.0), half_size, corner_radius_px)
-	         - board_sdf(px - vec2(0.0, 1.0), half_size, corner_radius_px);
-	vec2 grad_o = normalize(vec2(gx, gy) + vec2(1e-5, 0.0));
-
-	// Distance to the locked stack (it is a wall too)
+	// Locked stack = walls. Union with the outer boundary.
 	vec2 grid_pos = UV * cell_count;
 	vec2 cell_coord = floor(grid_pos);
 	float wall_sd;
 	vec2 wall_g;
 	wall_field(px, cell_coord, wall_sd, wall_g);
+	float sdf = max(bsdf, -wall_sd); // glass SDF: walls cut in like edges
 
-	// Nearest wall of any kind, and the outward direction toward it
-	float edge_sd = min(-bsdf, wall_sd);
-	vec2 edge_dir = (-bsdf) <= wall_sd ? grad_o : -wall_g;
+	// w: 0 at any wall, 1 in open water (button formula)
+	float max_dist = min(half_size.x, half_size.y) * 0.5;
+	float w = clamp(-sdf / max_dist, 0.0, 1.0);
 
-	// Same circular bevel profile as the original outer rim, everywhere
-	float bev = clamp(1.0 - max(edge_sd, 0.0) / bevel_px, 0.0, 1.0);
-	vec2 lat = edge_dir * bev;
+	// Direction toward the nearest wall (button: radial from center)
+	float gx = rounded_box_sdf(px + vec2(1.0, 0.0), half_size, corner_radius_px)
+	         - rounded_box_sdf(px - vec2(1.0, 0.0), half_size, corner_radius_px);
+	float gy = rounded_box_sdf(px + vec2(0.0, 1.0), half_size, corner_radius_px)
+	         - rounded_box_sdf(px - vec2(0.0, 1.0), half_size, corner_radius_px);
+	vec2 grad_o = normalize(vec2(gx, gy) + vec2(1e-5, 0.0));
+	vec2 uv_dir = (-bsdf) <= wall_sd ? grad_o : -wall_g;
 
-	// Ghost hole rim: gentle meniscus tilt toward the cutout (unchanged)
-	if (ghost_active > 0.5) {
-		float hx = hole_sdf(px + vec2(1.0, 0.0)) - hole_sdf(px - vec2(1.0, 0.0));
-		float hy = hole_sdf(px + vec2(0.0, 1.0)) - hole_sdf(px - vec2(0.0, 1.0));
-		vec2 grad_h = -normalize(vec2(hx, hy) + vec2(1e-5, 0.0)); // toward the hole
-		float bev_hole = clamp(1.0 - hs / hole_bevel_px, 0.0, 1.0);
-		bev_hole *= bev_hole; // eased ramp, gentle shoulder
-		lat += grad_h * bev_hole * hole_tilt;
-		bev = max(bev, bev_hole);
-	}
+	// ── Refraction warp (button-identical Gaussian edge bulge) ──
+	float warp_falloff = exp(-warp_strength * w * w);
+	vec2 warp_offset = uv_dir * warp_falloff * warp_intensity / 10.0;
 
-	// ── Water surface: sum of travelling directional waves ──
-	// Four octaves: slow swell (~300px), waves (~150px), chop (~75px),
-	// fine ripple (~40px). Each tilts the surface normal along its
-	// travel direction; the refraction below does the rest.
+	// ── Water waves: travelling ripples add to warp_offset ──
 	float t = TIME * wave_speed;
 	vec2 wp = px * wave_scale;
 	vec2 water = vec2(0.0);
@@ -237,12 +204,9 @@ void fragment() {
 	water += vec2(-0.60, 0.80) * cos(dot(wp, vec2(-0.60, 0.80)) * 0.041 + t * 2.0) * 0.28;
 	water += vec2(0.31, -0.95) * cos(dot(wp, vec2(0.31, -0.95)) * 0.083 - t * 2.9) * 0.18;
 	water += vec2(-0.95, -0.31) * cos(dot(wp, vec2(-0.95, -0.31)) * 0.150 + t * 3.7) * 0.12;
-	water *= wave_strength;
+	warp_offset += water * wave_strength * 0.05;
 
-	// ── Splash ripples: piece-shaped wavefronts where pieces land ──
-	// The wave crest follows iso-contours of the piece's distance field:
-	// it starts as the tetromino outline and rounds off as it expands.
-	vec2 splash_lat = vec2(0.0);
+	// ── Splash ripples: piece-shaped wavefronts add to warp_offset ──
 	float splash_glow = 0.0;
 	for (int i = 0; i < 6; i++) {
 		float age = splash_meta[i].x;
@@ -251,8 +215,6 @@ void fragment() {
 			continue;
 		}
 		float hc = splash_meta[i].z;
-
-		// Union SDF (+gradient) of the piece's 4 cells
 		float sd = 1e6;
 		vec2 sg = vec2(0.0, 1.0);
 		cell_sdf(px - splash_cells_a[i].xy, hc, sd, sg);
@@ -262,83 +224,62 @@ void fragment() {
 
 		float R = age * splash_speed_px;
 		float damp = exp(-age * 2.0) * amp;
-		float dpos = max(sd, 0.0); // distance outside the piece footprint
-
-		// Main crest + trailing wavelet, travelling outward from the outline
+		float dpos = max(sd, 0.0);
 		float q1 = (dpos - R) / 24.0;
 		float q2 = (dpos - R * 0.62) / 18.0;
 		float ring = exp(-q1 * q1);
 		float ring2 = 0.5 * exp(-q2 * q2);
-
-		// Plunge: the whole piece footprint stamps down, then rebounds
 		float inside = clamp(-sd / max(hc, 1.0), 0.0, 1.0);
 		float plunge = (inside + 0.5 * exp(-dpos * dpos / 400.0))
 		             * clamp(1.0 - age * 5.0, 0.0, 1.0);
-
-		splash_lat += sg * (ring + ring2) * damp;
-		splash_lat -= sg * plunge * amp * 0.7;
+		warp_offset += sg * (ring + ring2 - plunge) * damp * splash_strength * 0.05;
 		splash_glow += ring * damp;
 	}
 
-	// Gentle dome + water + splashes, fading out where the rim bevel takes over
-	vec2 dome_dir = px / half_size;
-	lat += (dome_dir * dome + water + splash_lat * splash_strength) * (1.0 - bev);
+	// ── Ghost hole rim: gentle pull toward the cutout ──
+	float hs = hole_sdf(px);
+	if (ghost_active > 0.5) {
+		float hx = hole_sdf(px + vec2(1.0, 0.0)) - hole_sdf(px - vec2(1.0, 0.0));
+		float hy = hole_sdf(px + vec2(0.0, 1.0)) - hole_sdf(px - vec2(0.0, 1.0));
+		vec2 grad_h = -normalize(vec2(hx, hy) + vec2(1e-5, 0.0));
+		float bev_hole = clamp(1.0 - hs / hole_bevel_px, 0.0, 1.0);
+		bev_hole *= bev_hole;
+		warp_offset += grad_h * bev_hole * hole_tilt * 0.05;
+	}
 
-	// Cap lateral tilt and build the unit normal
-	float lat_len = length(lat);
-	lat *= min(1.0, 0.97 / max(lat_len, 1e-4));
-	vec3 n = vec3(lat, sqrt(max(1.0 - dot(lat, lat), 0.001)));
-	float nxy = length(lat);
+	vec2 warped_uv = SCREEN_UV - warp_offset;
 
-	// ── Refraction with dispersion (separate IOR per channel) ──
-	vec2 off_r = refract_offset(n, 1.0 / (ior - dispersion));
-	vec2 off_g = refract_offset(n, 1.0 / ior);
-	vec2 off_b = refract_offset(n, 1.0 / (ior + dispersion));
+	// ── Chromatic aberration (button-identical R/B split near walls) ──
+	float edge_proximity = 1.0 - w;
+	float ca = edge_proximity * chromatic_strength;
+	vec2 chroma_offset = uv_dir * ca * SCREEN_PIXEL_SIZE;
 
-	// Rim shows SHARP bent content (that's what makes the lens readable);
-	// interior is frosted via mip lod.
-	float rim_w = smoothstep(0.15, 0.75, bev);
-	float lod = mix(frost_lod, 0.3, rim_w);
+	float bg_r = textureLod(bg_tex, warped_uv - chroma_offset, blur_amount).r;
+	float bg_g = textureLod(bg_tex, warped_uv, blur_amount).g;
+	float bg_b = textureLod(bg_tex, warped_uv + chroma_offset, blur_amount).b;
+	vec3 bg = vec3(bg_r, bg_g, bg_b);
 
-	vec3 bg;
-	bg.r = textureLod(bg_tex, SCREEN_UV + off_r * SCREEN_PIXEL_SIZE, lod).r;
-	bg.g = textureLod(bg_tex, SCREEN_UV + off_g * SCREEN_PIXEL_SIZE, lod).g;
-	bg.b = textureLod(bg_tex, SCREEN_UV + off_b * SCREEN_PIXEL_SIZE, lod).b;
-
-	// ── Vibrancy: glass saturates and lifts what's behind it ──
-	float luma = dot(bg, vec3(0.299, 0.587, 0.114));
-	bg = clamp(mix(vec3(luma), bg, saturation) * brightness, 0.0, 1.0);
-
-	// Light tint so the panel reads as material without hiding the bg
+	// ── Tint the glass (button-identical) ──
 	vec3 color = mix(bg, glass_tint.rgb, glass_tint.a);
 
-	// ── Speculars: key light top-left, counter glint bottom-right ──
-	vec3 L1 = normalize(vec3(-0.4, -0.65, 0.65));
-	vec3 L2 = normalize(vec3(0.4, 0.65, 0.5));
-	float spec = pow(max(dot(n, L1), 0.0), 24.0)
-	           + 0.55 * pow(max(dot(n, L2), 0.0), 24.0);
+	// ── Edge rim light (button-identical, traces walls too) ──
+	float rim = (1.0 - smoothstep(0.0, border_width, -sdf)) * step(sdf, 0.0);
+	rim *= rim_intensity;
+	color = mix(color, border_color.rgb, rim * border_color.a);
 
-	// Sun glint: broad sparkle where wave crests tilt toward the key light
-	float glint = pow(max(dot(n, L1), 0.0), 10.0) * glint_intensity;
+	// ── Border stroke (button-identical, traces walls too) ──
+	float border = 1.0 - smoothstep(border_width - 1.5, border_width + 1.5, abs(sdf));
+	color = mix(color, border_color.rgb, border * border_color.a);
 
-	// Fresnel-ish bright band hugging the whole rim
-	float fresnel = pow(nxy, 3.0) * 0.16;
-
-	// Hairline at every glass edge: outer rim, stack walls, hole rim
-	float hairline = (1.0 - smoothstep(0.0, rim_width_px,
-		min(-csdf, wall_sd))) * 0.25;
-
-	color += rim_color.rgb * rim_color.a *
-	         (spec * spec_intensity + glint + fresnel + hairline +
-	          splash_glow * 0.25);
-
-	// ── Faint top sheen ──
-	float sheen = smoothstep(sheen_falloff, 0.0, UV.y) * sheen_intensity;
+	// ── Top specular sheen (button-identical) ──
+	float sheen = smoothstep(sheen_falloff, 0.0, UV.y) * sheen_intensity * (1.0 - w * 0.6);
 	color += vec3(sheen);
+
+	// Splash crest gleam
+	color += border_color.rgb * splash_glow * 0.2;
 
 	// ── Cells on top of the glass ──
 	vec2 local_uv = fract(grid_pos);
-
 	if (cell_coord.x >= 0.0 && cell_coord.x < cell_count.x &&
 	    cell_coord.y >= 0.0 && cell_coord.y < cell_count.y) {
 
@@ -348,7 +289,7 @@ void fragment() {
 		              local_uv.y < pad_min.y || local_uv.y > pad_max.y;
 
 		if (in_pad) {
-			// Grid line — barely-there etched line, keeps the slab feel
+			// Grid line — barely-there etched line
 			color *= 0.9;
 		} else {
 			float tex_u = (cell_coord.x + 0.5) / 10.0;
@@ -375,9 +316,9 @@ void fragment() {
 	}
 
 	// ── Ghost hole: see-through window with a piece-color wash ──
-	float hole_mask = (1.0 - smoothstep(-0.75, 0.75, hs)) * board_alpha;
+	float hole_mask = (1.0 - smoothstep(-0.75, 0.75, hs)) * shape_alpha;
 	color = mix(color, ghost_color.rgb, hole_mask);
-	float alpha_out = mix(board_alpha, ghost_color.a, hole_mask);
+	float alpha_out = mix(shape_alpha, ghost_color.a, hole_mask);
 
 	COLOR = vec4(color, alpha_out);
 }
