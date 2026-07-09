@@ -64,8 +64,11 @@ uniform vec4 ghost_color : source_color = vec4(1.0, 1.0, 1.0, 0.28); // piece-co
 
 // Locked blocks are solid land: the water forms a meniscus where it
 // laps against the stack.
-uniform float wall_bevel_px : hint_range(1.0, 200.0) = 30.0;  // meniscus width at the stack
-uniform float wall_tilt : hint_range(0.0, 1.0) = 0.3;         // meniscus refraction strength
+uniform float wall_bevel_px : hint_range(1.0, 200.0) = 44.0;  // meniscus width at the stack
+uniform float wall_tilt : hint_range(0.0, 1.0) = 0.55;        // meniscus refraction strength
+uniform float foam_width_px : hint_range(1.0, 60.0) = 12.0;   // foam band along the waterline
+uniform float foam_intensity : hint_range(0.0, 1.5) = 0.55;
+uniform float shore_shadow : hint_range(0.0, 0.6) = 0.22;     // wet contact darkening at the stack
 uniform float saturation : hint_range(0.5, 2.0) = 1.35;      // vibrancy
 uniform float brightness : hint_range(0.5, 1.5) = 1.06;
 uniform float spec_intensity : hint_range(0.0, 3.0) = 1.0;
@@ -106,6 +109,12 @@ vec4 get_color(float type) {
 	if (type < 5.5) return color_5;
 	if (type < 6.5) return color_6;
 	return color_7;
+}
+
+float hash21(vec2 p) {
+	p = fract(p * vec2(123.34, 345.45));
+	p += dot(p, p + 34.345);
+	return fract(p.x * p.y);
 }
 
 // Plain box SDF (no gradient)
@@ -339,6 +348,22 @@ void fragment() {
 	// ── Faint top sheen ──
 	float sheen = smoothstep(sheen_falloff, 0.0, UV.y) * sheen_intensity;
 	color += vec3(sheen);
+
+	// ── Shoreline against the locked stack ──
+	if (wall_sd < 1e5 && wall_sd >= 0.0) {
+		float band = 1.0 - smoothstep(0.0, wall_bevel_px, wall_sd);
+
+		// Wet contact shadow: the water darkens as it deepens at the wall
+		color *= 1.0 - band * band * shore_shadow;
+
+		// Foam: shimmering speckle band hugging the waterline
+		float fband = 1.0 - smoothstep(0.0, foam_width_px, wall_sd);
+		float grain = hash21(floor(px * 0.6));
+		float foam = fband * fband *
+			smoothstep(0.35, 1.0,
+				grain * (0.7 + 0.3 * sin(TIME * 2.5 + grain * 6.28)));
+		color += vec3(1.0) * foam * foam_intensity;
+	}
 
 	// ── Cells on top of the glass ──
 	vec2 local_uv = fract(grid_pos);
