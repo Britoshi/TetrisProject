@@ -273,13 +273,13 @@ func _bake_board_bg() -> void:
 		var oy := int((ih - crop_h) / 2.0)
 		img = img.get_region(Rect2i(ox, oy, crop_w, crop_h))
 
-	# Blur = decimate hard, then smooth back up. At ~1/9 screen height each
-	# texel covers ~9px of screen; the cubic upscale removes bilinear facets.
-	# Kept light enough that the rim refraction has structure to bend.
-	var small_h := 120
-	var small_w := maxi(2, int(round(small_h * vp_size.x / vp_size.y)))
-	img.resize(small_w, small_h, Image.INTERPOLATE_LANCZOS)
-	img.resize(small_w * 3, small_h * 3, Image.INTERPOLATE_CUBIC)
+	# Bake SHARP at ~1/3 screen res WITH mipmaps. The shader picks blur
+	# per-pixel via textureLod: lod 0 (sharp) on the refracting rim so the
+	# bent content is recognizable, high lod (frosted) in the interior.
+	var base_h := clampi(int(vp_size.y / 3.0), 64, 1024)
+	var base_w := maxi(2, int(round(base_h * vp_size.x / vp_size.y)))
+	img.resize(base_w, base_h, Image.INTERPOLATE_LANCZOS)
+	img.generate_mipmaps()
 
 	_board_material.set_shader_parameter("bg_tex", ImageTexture.create_from_image(img))
 	_bg_bake_size = vp_size
@@ -336,9 +336,12 @@ func _create_board_node() -> void:
 	_bake_board_bg()
 
 	# Glass optics (pixel-space; bevel/thickness set per-layout in _position_all_nodes)
-	_board_material.set_shader_parameter("blur_px", 2.5)
 	_board_material.set_shader_parameter("ior", 1.45)
-	_board_material.set_shader_parameter("dispersion", 0.03)
+	_board_material.set_shader_parameter("dispersion", 0.04)
+	_board_material.set_shader_parameter("frost_lod", 2.2)
+	_board_material.set_shader_parameter("dome", 0.05)
+	_board_material.set_shader_parameter("ripple_strength", 0.045)
+	_board_material.set_shader_parameter("ripple_speed", 1.0)
 	_board_material.set_shader_parameter("saturation", 1.35)
 	_board_material.set_shader_parameter("brightness", 1.06)
 	_board_material.set_shader_parameter("spec_intensity", 1.0)
@@ -703,8 +706,8 @@ func _position_all_nodes() -> void:
 	if _board_material:
 		_board_material.set_shader_parameter("rect_size", Vector2(board_w, board_h))
 		_board_material.set_shader_parameter("corner_radius_px", cs * 0.8)
-		_board_material.set_shader_parameter("bevel_px", cs * 1.1)
-		_board_material.set_shader_parameter("thickness_px", cs * 1.6)
+		_board_material.set_shader_parameter("bevel_px", cs * 2.0)
+		_board_material.set_shader_parameter("thickness_px", cs * 2.6)
 		if _bg_bake_size != get_viewport_rect().size:
 			_bake_board_bg()
 

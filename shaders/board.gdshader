@@ -15,7 +15,7 @@ shader_type canvas_item;
 // baked on the CPU (main.gd _bake_board_bg), sampled at SCREEN_UV.
 
 uniform sampler2D board_tex : repeat_disable, filter_nearest;
-uniform sampler2D bg_tex : repeat_disable, filter_linear;
+uniform sampler2D bg_tex : repeat_disable, filter_linear_mipmap;
 
 // Geometry (pixels)
 uniform vec2 rect_size = vec2(320.0, 640.0);
@@ -27,11 +27,14 @@ uniform float vanish_offset = 2.0;
 uniform float cell_padding : hint_range(0.0, 0.2) = 0.04;
 
 // Glass optics
-uniform float bevel_px : hint_range(1.0, 200.0) = 40.0;      // rolled-edge width
-uniform float thickness_px : hint_range(0.0, 300.0) = 60.0;  // slab thickness (refraction throw)
+uniform float bevel_px : hint_range(1.0, 300.0) = 70.0;      // rolled-edge width
+uniform float thickness_px : hint_range(0.0, 400.0) = 90.0;  // slab thickness (refraction throw)
 uniform float ior : hint_range(1.0, 2.0) = 1.45;
-uniform float dispersion : hint_range(0.0, 0.2) = 0.03;      // per-channel IOR spread
-uniform float blur_px : hint_range(0.0, 12.0) = 2.5;         // extra frost on top of baked blur
+uniform float dispersion : hint_range(0.0, 0.2) = 0.04;      // per-channel IOR spread
+uniform float frost_lod : hint_range(0.0, 6.0) = 2.2;        // interior frost (mip level)
+uniform float dome : hint_range(0.0, 0.3) = 0.05;            // gentle whole-slab lens curvature
+uniform float ripple_strength : hint_range(0.0, 0.3) = 0.045; // animated liquid shimmer
+uniform float ripple_speed : hint_range(0.0, 4.0) = 1.0;
 uniform float saturation : hint_range(0.5, 2.0) = 1.35;      // vibrancy
 uniform float brightness : hint_range(0.5, 1.5) = 1.06;
 uniform float spec_intensity : hint_range(0.0, 3.0) = 1.0;
@@ -74,17 +77,6 @@ vec4 get_color(float type) {
 	return color_7;
 }
 
-// 5-tap cross blur (bg_tex is already pre-blurred; this just smooths seams)
-vec3 blur_sample(vec2 uv, vec2 px_size) {
-	vec2 o = px_size * blur_px;
-	vec3 s = texture(bg_tex, uv).rgb * 0.4;
-	s += texture(bg_tex, uv + vec2(o.x, 0.0)).rgb * 0.15;
-	s += texture(bg_tex, uv - vec2(o.x, 0.0)).rgb * 0.15;
-	s += texture(bg_tex, uv + vec2(0.0, o.y)).rgb * 0.15;
-	s += texture(bg_tex, uv - vec2(0.0, o.y)).rgb * 0.15;
-	return s;
-}
-
 // Refract the straight-down view ray through the slab surface and
 // project it across the glass thickness onto the background plane.
 vec2 refract_offset(vec3 n, float eta) {
@@ -112,19 +104,39 @@ void fragment() {
 	vec2 grad = normalize(vec2(gx, gy) + vec2(1e-5, 0.0));
 
 	// Circular bevel profile: normal tilts fully sideways at the rim,
-	// flattens to straight-up over bevel_px. (nxy = cos of bevel angle)
-	float nxy = clamp(1.0 + sdf / bevel_px, 0.0, 1.0) * 0.97;
-	vec3 n = vec3(grad * nxy, sqrt(1.0 - nxy * nxy));
+	// flattens to straight-up over bevel_px.
+	float bev = clamp(1.0 + sdf / bevel_px, 0.0, 1.0);
+	vec2 lat = grad * bev;
+
+	// Gentle dome over the whole slab (weak magnifying lens in the interior)
+	vec2 dome_dir = px / half_size;
+	lat += dome_dir * dome * (1.0 - bev);
+
+	// Animated liquid shimmer: slow travelling ripple perturbs the surface
+	lat += ripple_strength * (1.0 - bev) * vec2(
+		sin(TIME * ripple_speed * 1.1 + px.y * 0.045),
+		cos(TIME * ripple_speed * 0.9 + px.x * 0.045));
+
+	// Cap lateral tilt and build the unit normal
+	float lat_len = length(lat);
+	lat *= min(1.0, 0.97 / max(lat_len, 1e-4));
+	vec3 n = vec3(lat, sqrt(max(1.0 - dot(lat, lat), 0.001)));
+	float nxy = length(lat);
 
 	// ── Refraction with dispersion (separate IOR per channel) ──
 	vec2 off_r = refract_offset(n, 1.0 / (ior - dispersion));
 	vec2 off_g = refract_offset(n, 1.0 / ior);
 	vec2 off_b = refract_offset(n, 1.0 / (ior + dispersion));
 
+	// Rim shows SHARP bent content (that's what makes the lens readable);
+	// interior is frosted via mip lod.
+	float rim_w = smoothstep(0.15, 0.75, bev);
+	float lod = mix(frost_lod, 0.3, rim_w);
+
 	vec3 bg;
-	bg.r = blur_sample(SCREEN_UV + off_r * SCREEN_PIXEL_SIZE, SCREEN_PIXEL_SIZE).r;
-	bg.g = blur_sample(SCREEN_UV + off_g * SCREEN_PIXEL_SIZE, SCREEN_PIXEL_SIZE).g;
-	bg.b = blur_sample(SCREEN_UV + off_b * SCREEN_PIXEL_SIZE, SCREEN_PIXEL_SIZE).b;
+	bg.r = textureLod(bg_tex, SCREEN_UV + off_r * SCREEN_PIXEL_SIZE, lod).r;
+	bg.g = textureLod(bg_tex, SCREEN_UV + off_g * SCREEN_PIXEL_SIZE, lod).g;
+	bg.b = textureLod(bg_tex, SCREEN_UV + off_b * SCREEN_PIXEL_SIZE, lod).b;
 
 	// ── Vibrancy: glass saturates and lifts what's behind it ──
 	float luma = dot(bg, vec3(0.299, 0.587, 0.114));
