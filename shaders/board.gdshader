@@ -5,7 +5,7 @@ shader_type canvas_item;
 // Piece cells render as flat colors on top. Grid gaps between cells.
 
 uniform sampler2D board_tex : repeat_disable, filter_nearest;
-uniform sampler2D screen_texture : hint_screen_texture, filter_linear_mipmap;
+uniform sampler2D bg_tex : repeat_disable, filter_linear_mipmap;
 
 // Grid
 uniform vec2 cell_count = vec2(10.0, 20.0);
@@ -83,9 +83,9 @@ void fragment() {
 	float ca = w * chromatic_strength;
 	vec2 chroma_offset = uv_dir * ca * SCREEN_PIXEL_SIZE;
 
-	float bg_r = textureLod(screen_texture, warped_uv - chroma_offset, blur_amount).r;
-	float bg_g = textureLod(screen_texture, warped_uv, blur_amount).g;
-	float bg_b = textureLod(screen_texture, warped_uv + chroma_offset, blur_amount).b;
+	float bg_r = textureLod(bg_tex, warped_uv - chroma_offset, blur_amount).r;
+	float bg_g = textureLod(bg_tex, warped_uv, blur_amount).g;
+	float bg_b = textureLod(bg_tex, warped_uv + chroma_offset, blur_amount).b;
 	vec3 bg = vec3(bg_r, bg_g, bg_b);
 
 	// Tint

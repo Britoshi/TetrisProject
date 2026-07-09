@@ -270,7 +270,31 @@ func _create_board_node() -> void:
 	_board_material = ShaderMaterial.new()
 	_board_material.shader = shader_res
 
-	# Glass + shape uniforms
+	# ── Background capture via SubViewport ──
+	var bg_viewport := SubViewport.new()
+	bg_viewport.name = "BoardBgViewport"
+	bg_viewport.size = get_viewport_rect().size
+	bg_viewport.transparent_bg = true
+	bg_viewport.handle_input_locally = false
+	_game_layer.add_child(bg_viewport)
+
+	# Copy background image into the SubViewport
+	var bg_copy := TextureRect.new()
+	bg_copy.name = "BgCopy"
+	bg_copy.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_COVERED
+	bg_copy.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var bg_tex := load("res://videos/azure-horizon.png") as Texture2D
+	if bg_tex:
+		bg_copy.texture = bg_tex
+	else:
+		bg_copy.color = Color(0.1, 0.1, 0.15)
+	bg_viewport.add_child(bg_copy)
+
+	# Pass ViewportTexture to board shader
+	var vp_tex := bg_viewport.get_texture()
+	_board_material.set_shader_parameter("bg_tex", vp_tex)
+
+	# Glass uniforms
 	_board_material.set_shader_parameter("corner_radius", 0.08)
 	_board_material.set_shader_parameter("edge_smoothness", 1.2)
 	_board_material.set_shader_parameter("warp_intensity", 0.3)
@@ -282,10 +306,10 @@ func _create_board_node() -> void:
 	_board_material.set_shader_parameter("sheen_falloff", 0.4)
 	_board_material.set_shader_parameter("glass_tint", Color(0.03, 0.03, 0.08, 0.7))
 	_board_material.set_shader_parameter("rim_color", Color(1.0, 1.0, 1.0, 0.2))
-	_board_material.set_shader_parameter("grid_color", Color(0.0, 0.0, 0.0, 0.25))
 
 	# Colors from Constants.COLORS
 	var c := Constants.COLORS
+	_board_material.set_shader_parameter("color_1", c[Constants.PieceType.I])
 	_board_material.set_shader_parameter("color_1", c[Constants.PieceType.I])
 	_board_material.set_shader_parameter("color_2", c[Constants.PieceType.O])
 	_board_material.set_shader_parameter("color_3", c[Constants.PieceType.T])
