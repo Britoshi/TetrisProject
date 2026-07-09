@@ -44,40 +44,38 @@ void fragment() {
 	vec2 cell_coord = floor(grid_pos);
 	vec2 local_uv = fract(grid_pos);
 
-	// Cell bounds check
+	// Cell bounds check — use if/else chain instead of return (Godot restriction)
 	if (cell_coord.x < 0.0 || cell_coord.x >= cell_count.x ||
 	    cell_coord.y < 0.0 || cell_coord.y >= cell_count.y) {
 		COLOR = color_empty;
-		return;
-	}
+	} else {
+		// Padding creates grid lines
+		vec2 pad_min = vec2(cell_padding);
+		vec2 pad_max = vec2(1.0 - cell_padding);
+		if (local_uv.x < pad_min.x || local_uv.x > pad_max.x ||
+		    local_uv.y < pad_min.y || local_uv.y > pad_max.y) {
+			COLOR = grid_color;
+		} else {
+			// Sample data texture — piece type
+			float tex_u = cell_coord.x / 10.0;
+			float tex_v = (cell_coord.y + vanish_offset) / 22.0;
+			float piece_type = texture(board_tex, vec2(tex_u, tex_v)).r;
 
-	// Padding creates grid lines
-	vec2 pad_min = vec2(cell_padding);
-	vec2 pad_max = vec2(1.0 - cell_padding);
-	if (local_uv.x < pad_min.x || local_uv.x > pad_max.x ||
-	    local_uv.y < pad_min.y || local_uv.y > pad_max.y) {
-		COLOR = grid_color;
-		return;
-	}
+			vec4 cell_color = get_color(piece_type);
 
-	// Sample data texture — piece type
-	float tex_u = cell_coord.x / 10.0;
-	float tex_v = (cell_coord.y + vanish_offset) / 22.0;
-	float piece_type = texture(board_tex, vec2(tex_u, tex_v)).r;
+			// Line clear flash
+			if (flash_intensity > 0.01) {
+				if (cell_coord.y == flash_rows.x || cell_coord.y == flash_rows.y ||
+				    cell_coord.y == flash_rows.z || cell_coord.y == flash_rows.w) {
+					cell_color = mix(cell_color, vec4(1.0, 1.0, 1.0, 1.0), flash_intensity * 0.8);
+				}
+			}
 
-	vec4 cell_color = get_color(piece_type);
+			// Subtle top highlight
+			vec2 inner_uv = (local_uv - pad_min) / (pad_max - pad_min);
+			cell_color.rgb += smoothstep(0.6, 1.0, inner_uv.y) * 0.06;
 
-	// Line clear flash
-	if (flash_intensity > 0.01) {
-		if (cell_coord.y == flash_rows.x || cell_coord.y == flash_rows.y ||
-		    cell_coord.y == flash_rows.z || cell_coord.y == flash_rows.w) {
-			cell_color = mix(cell_color, vec4(1.0, 1.0, 1.0, 1.0), flash_intensity * 0.8);
+			COLOR = cell_color;
 		}
 	}
-
-	// Subtle top highlight
-	vec2 inner_uv = (local_uv - pad_min) / (pad_max - pad_min);
-	cell_color.rgb += smoothstep(0.6, 1.0, inner_uv.y) * 0.06;
-
-	COLOR = cell_color;
 }
