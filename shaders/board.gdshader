@@ -60,6 +60,7 @@ uniform float ghost_half = 12.0;                              // cell half-size 
 uniform float ghost_round = 4.0;                              // hole corner rounding
 uniform float hole_bevel_px : hint_range(1.0, 200.0) = 34.0;  // lens rim width around the hole
 uniform float hole_tilt : hint_range(0.0, 1.0) = 0.35;        // hole rim refraction strength
+uniform vec4 ghost_color : source_color = vec4(1.0, 1.0, 1.0, 0.28); // piece-color wash over the window
 uniform float saturation : hint_range(0.5, 2.0) = 1.35;      // vibrancy
 uniform float brightness : hint_range(0.5, 1.5) = 1.06;
 uniform float spec_intensity : hint_range(0.0, 3.0) = 1.0;
@@ -156,9 +157,9 @@ void fragment() {
 	float hs = hole_sdf(px);
 	float csdf = max(bsdf, -hs);
 
-	// 1.5px anti-aliased edge (outer rim AND hole rim — hole is truly
-	// transparent, the real background layer shows through)
-	float board_alpha = 1.0 - smoothstep(-0.75, 0.75, csdf);
+	// 1.5px anti-aliased outer edge. The hole is NOT discarded — it
+	// renders as a low-alpha piece-color wash over the real background.
+	float board_alpha = 1.0 - smoothstep(-0.75, 0.75, bsdf);
 	if (board_alpha < 0.004)
 		discard;
 
@@ -335,5 +336,10 @@ void fragment() {
 		}
 	}
 
-	COLOR = vec4(color, board_alpha);
+	// ── Ghost hole: see-through window with a piece-color wash ──
+	float hole_mask = (1.0 - smoothstep(-0.75, 0.75, hs)) * board_alpha;
+	color = mix(color, ghost_color.rgb, hole_mask);
+	float alpha_out = mix(board_alpha, ghost_color.a, hole_mask);
+
+	COLOR = vec4(color, alpha_out);
 }

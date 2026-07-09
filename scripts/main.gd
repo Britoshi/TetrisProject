@@ -583,6 +583,8 @@ func _update_ghost_positions() -> void:
 		var c := Vector2(cell.x + 0.5, cell.y - 2.0 + 0.5) * float(cs)
 		p.append(c - board_size * 0.5)
 	var rounding: float = cs * 0.12
+	var pcolor: Color = Constants.COLORS.get(controller.piece_type, Color.GRAY) as Color
+	_board_material.set_shader_parameter("ghost_color", Color(pcolor.r, pcolor.g, pcolor.b, 0.28))
 	_board_material.set_shader_parameter("ghost_active", 1.0)
 	_board_material.set_shader_parameter("ghost_half", cs * 0.5 - rounding)
 	_board_material.set_shader_parameter("ghost_round", rounding)
