@@ -79,14 +79,27 @@ void fragment() {
 	vec2 warp_offset = uv_dir * warp_falloff * warp_intensity * 0.01;
 	vec2 warped_uv = SCREEN_UV - warp_offset;
 
-	// ── Chromatic aberration at edges ──
-	float ca = w * chromatic_strength;
-	vec2 chroma_offset = uv_dir * ca * SCREEN_PIXEL_SIZE;
+	// ── Manual multi-sample blur (ViewportTexture has no mipmaps) ──
+	float blur_px = blur_amount * 2.0;
+	vec2 blur_step = SCREEN_PIXEL_SIZE * blur_px;
+	vec3 bg = vec3(0.0);
+	float total_weight = 0.0;
 
-	float bg_r = textureLod(bg_tex, warped_uv - chroma_offset, blur_amount).r;
-	float bg_g = textureLod(bg_tex, warped_uv, blur_amount).g;
-	float bg_b = textureLod(bg_tex, warped_uv + chroma_offset, blur_amount).b;
-	vec3 bg = vec3(bg_r, bg_g, bg_b);
+	// 9-tap box blur with chromatic aberration at edges
+	float ca = w * chromatic_strength;
+	for (int x = -1; x <= 1; x++) {
+		for (int y = -1; y <= 1; y++) {
+			vec2 offset = vec2(float(x), float(y)) * blur_step;
+			float weight = 1.0; // box blur
+			vec2 sample_uv = warped_uv + offset;
+			vec2 chroma = uv_dir * ca * SCREEN_PIXEL_SIZE;
+			bg.r += texture(bg_tex, sample_uv - chroma).r * weight;
+			bg.g += texture(bg_tex, sample_uv).g * weight;
+			bg.b += texture(bg_tex, sample_uv + chroma).b * weight;
+			total_weight += weight;
+		}
+	}
+	bg /= total_weight;
 
 	// Tint
 	vec3 color = mix(bg, glass_tint.rgb, glass_tint.a);

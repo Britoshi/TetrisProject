@@ -96,6 +96,7 @@ var _next_materials: Array = []
 
 # Background fallback
 var _bg_fallback_rect: ColorRect = null
+var _bg_viewport: SubViewport = null
 
 # Piece shader resource (shared by all piece cells)
 var _piece_shader: Shader = null
@@ -271,11 +272,14 @@ func _create_board_node() -> void:
 	_board_material.shader = shader_res
 
 	# ── Background capture via SubViewport ──
-	var bg_viewport := SubViewport.new()
+	_bg_viewport = SubViewport.new()
+	var bg_viewport := _bg_viewport
 	bg_viewport.name = "BoardBgViewport"
 	bg_viewport.size = get_viewport_rect().size
-	bg_viewport.transparent_bg = true
+	bg_viewport.render_target_update_mode = SubViewport.UPDATE_ALWAYS
+	bg_viewport.transparent_bg = false
 	bg_viewport.handle_input_locally = false
+	bg_viewport.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_game_layer.add_child(bg_viewport)
 
 	# Copy background image into the SubViewport
@@ -292,6 +296,7 @@ func _create_board_node() -> void:
 
 	# Pass ViewportTexture to board shader
 	var vp_tex := bg_viewport.get_texture()
+	_bg_vp_tex = vp_tex
 	_board_material.set_shader_parameter("bg_tex", vp_tex)
 
 	# Glass uniforms
@@ -664,6 +669,13 @@ func _position_all_nodes() -> void:
 		var preview_spacing: float = cs * 3
 		for i in range(_next_sub_containers.size()):
 			_next_sub_containers[i].position = Vector2(0, i * preview_spacing)
+
+	# SubViewport resize
+	if _bg_viewport:
+		_bg_viewport.size = vp.size
+		var bg_copy := _bg_viewport.get_child(0) if _bg_viewport.get_child_count() > 0 else null
+		if bg_copy:
+			bg_copy.size = vp.size
 
 	# Background fallback
 	if _bg_fallback_rect:
