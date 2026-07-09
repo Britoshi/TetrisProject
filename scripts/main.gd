@@ -279,7 +279,6 @@ func _create_board_node() -> void:
 	bg_viewport.render_target_update_mode = SubViewport.UPDATE_ALWAYS
 	bg_viewport.transparent_bg = false
 	bg_viewport.handle_input_locally = false
-	bg_viewport.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_game_layer.add_child(bg_viewport)
 
 	# Copy background image into the SubViewport
