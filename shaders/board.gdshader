@@ -96,7 +96,9 @@ uniform float block_emission : hint_range(0.0, 4.0) = 1.2;
 uniform float block_tint_alpha : hint_range(0.0, 1.0) = 0.65;
 uniform float block_warp_intensity : hint_range(0.0, 2.0) = 0.15;
 // 0 = each block keeps its flat color; 1 = colors melt into neighbors
-uniform float block_color_blend : hint_range(0.0, 1.0) = 1.0;
+uniform float block_color_blend : hint_range(0.0, 1.0) = 0.4;
+// Width of the color-blend seam, in cells (0.5 = full bilinear smear)
+uniform float block_blend_band : hint_range(0.02, 0.5) = 0.14;
 
 // ── Squircle SDF (identical to the button's rounded_box_sdf) ──
 float rounded_box_sdf(vec2 p, vec2 b, float r) {
@@ -177,6 +179,11 @@ float piece_cell_box(vec2 p, vec2 cc, int mask, float r) {
 vec3 blended_block_color(vec2 gp) {
 	vec2 base = floor(gp - 0.5);
 	vec2 f = fract(gp - 0.5);
+	// f = 0.5 is a cell boundary, f = 0/1 is a cell center. Sharpen so the
+	// blend is confined to a narrow seam of width block_blend_band around
+	// each boundary instead of smearing across the full cell (bilinear).
+	vec2 b = vec2(block_blend_band);
+	f = smoothstep(0.5 - b, 0.5 + b, f);
 	vec3 acc = vec3(0.0);
 	float wsum = 0.0;
 	for (int i = 0; i < 2; i++) {
