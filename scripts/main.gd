@@ -142,9 +142,11 @@ func _setup_glow_environment() -> void:
 	env.glow_enabled = true
 	env.glow_intensity = 0.9
 	env.glow_strength = 1.04
-	env.glow_bloom = 0.15
+	# bloom must stay 0.0: any higher additively smears the WHOLE screen
+	# (below-threshold light included) into a white wash
+	env.glow_bloom = 0.0
 	env.glow_blend_mode = Environment.GLOW_BLEND_MODE_ADDITIVE
-	env.glow_hdr_threshold = 1.1
+	env.glow_hdr_threshold = 1.2
 	var we := WorldEnvironment.new()
 	we.name = "GlowEnvironment"
 	we.environment = env
