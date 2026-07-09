@@ -49,6 +49,16 @@ uniform vec4 splash_cells_a[6];
 uniform vec4 splash_cells_b[6];
 uniform float splash_strength : hint_range(0.0, 2.0) = 0.7;
 uniform float splash_speed_px : hint_range(50.0, 600.0) = 240.0; // ring expansion px/s
+
+// Ghost hole: the drop-preview footprint is CUT OUT of the glass slab.
+// Fully transparent inside; the glass forms a rolled lens rim around it.
+// cells_a/b: 4 cell centers (board px, origin at rect center).
+uniform float ghost_active = 0.0;
+uniform vec4 ghost_cells_a = vec4(0.0);
+uniform vec4 ghost_cells_b = vec4(0.0);
+uniform float ghost_half = 12.0;                              // cell half-size minus rounding
+uniform float ghost_round = 4.0;                              // hole corner rounding
+uniform float hole_bevel_px : hint_range(1.0, 200.0) = 34.0;  // lens rim width around the hole
 uniform float saturation : hint_range(0.5, 2.0) = 1.35;      // vibrancy
 uniform float brightness : hint_range(0.5, 1.5) = 1.06;
 uniform float spec_intensity : hint_range(0.0, 3.0) = 1.0;
@@ -91,6 +101,31 @@ vec4 get_color(float type) {
 	return color_7;
 }
 
+// Plain box SDF (no gradient)
+float box_sdf(vec2 rel, float hc) {
+	vec2 q = abs(rel) - vec2(hc);
+	return length(max(q, vec2(0.0))) + min(max(q.x, q.y), 0.0);
+}
+
+// SDF of the ghost hole: union of its 4 cells, corners rounded
+float hole_sdf(vec2 p) {
+	if (ghost_active < 0.5)
+		return 1e6;
+	float d = box_sdf(p - ghost_cells_a.xy, ghost_half);
+	d = min(d, box_sdf(p - ghost_cells_a.zw, ghost_half));
+	d = min(d, box_sdf(p - ghost_cells_b.xy, ghost_half));
+	d = min(d, box_sdf(p - ghost_cells_b.zw, ghost_half));
+	return d - ghost_round;
+}
+
+// Normalized depth to the nearest glass edge (outer rim or hole rim),
+// each scaled by its own bevel width. 0 at an edge, >= 1 in flat glass.
+float glass_depth(vec2 p) {
+	float b = -board_sdf(p, rect_size * 0.5, corner_radius_px) / max(bevel_px, 1.0);
+	float h = hole_sdf(p) / max(hole_bevel_px, 1.0);
+	return min(b, h);
+}
+
 // Accumulate the signed distance (and its gradient) to one splash cell —
 // an axis-aligned square of half-size hc. Union via min.
 void cell_sdf(vec2 rel, float hc, inout float sd, inout vec2 sg) {
@@ -122,24 +157,28 @@ void fragment() {
 	// ── Shape (pixel space, origin at rect center) ──
 	vec2 half_size = rect_size * 0.5;
 	vec2 px = (UV - 0.5) * rect_size;
-	float sdf = board_sdf(px, half_size, corner_radius_px);
 
-	// 1.5px anti-aliased edge
-	float board_alpha = 1.0 - smoothstep(-0.75, 0.75, sdf);
+	// Slab with the ghost hole cut out: max(board, -hole)
+	float bsdf = board_sdf(px, half_size, corner_radius_px);
+	float csdf = max(bsdf, -hole_sdf(px));
+
+	// 1.5px anti-aliased edge (outer rim AND hole rim — hole is truly
+	// transparent, the real background layer shows through)
+	float board_alpha = 1.0 - smoothstep(-0.75, 0.75, csdf);
 	if (board_alpha < 0.004)
 		discard;
 
 	// ── Surface normal of the glass slab ──
-	// Lateral direction: SDF gradient (central differences, 1px step)
-	float gx = board_sdf(px + vec2(1.0, 0.0), half_size, corner_radius_px)
-	         - board_sdf(px - vec2(1.0, 0.0), half_size, corner_radius_px);
-	float gy = board_sdf(px + vec2(0.0, 1.0), half_size, corner_radius_px)
-	         - board_sdf(px - vec2(0.0, 1.0), half_size, corner_radius_px);
-	vec2 grad = normalize(vec2(gx, gy) + vec2(1e-5, 0.0));
+	// Depth field: 0 at the nearest edge (outer or hole), 1 in flat glass.
+	// Its gradient points inward; the bevel normal tilts outward.
+	float d0 = glass_depth(px);
+	float ddx = glass_depth(px + vec2(1.0, 0.0)) - glass_depth(px - vec2(1.0, 0.0));
+	float ddy = glass_depth(px + vec2(0.0, 1.0)) - glass_depth(px - vec2(0.0, 1.0));
+	vec2 grad = -normalize(vec2(ddx, ddy) + vec2(1e-5, 0.0));
 
-	// Circular bevel profile: normal tilts fully sideways at the rim,
-	// flattens to straight-up over bevel_px.
-	float bev = clamp(1.0 + sdf / bevel_px, 0.0, 1.0);
+	// Circular bevel profile: normal tilts fully sideways at either rim,
+	// flattens to straight-up one bevel-width in.
+	float bev = 1.0 - clamp(d0, 0.0, 1.0);
 	vec2 lat = grad * bev;
 
 	// ── Water surface: sum of travelling directional waves ──
@@ -240,8 +279,8 @@ void fragment() {
 	// Fresnel-ish bright band hugging the whole rim
 	float fresnel = pow(nxy, 3.0) * 0.16;
 
-	// Hairline at the very edge
-	float hairline = (1.0 - smoothstep(0.0, rim_width_px, -sdf)) * 0.25;
+	// Hairline at the very edge (outer rim and hole rim alike)
+	float hairline = (1.0 - smoothstep(0.0, rim_width_px, -csdf)) * 0.25;
 
 	color += rim_color.rgb * rim_color.a *
 	         (spec * spec_intensity + glint + fresnel + hairline +

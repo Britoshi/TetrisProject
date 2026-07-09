@@ -558,32 +558,35 @@ func _update_piece_positions() -> void:
 		idx += 1
 
 func _update_ghost_positions() -> void:
-	"""Position ghost piece cells each frame."""
+	"""Drive the glass hole cutout at the ghost (drop preview) position.
+	The old translucent cells are replaced by a piece-shaped hole in the
+	liquid glass — fully see-through, lens rim wrapping around it."""
+	_ghost_container.visible = false
+	if _board_material == null:
+		return
 	if state != State.PLAYING or controller.is_locked:
-		_ghost_container.visible = false
+		_board_material.set_shader_parameter("ghost_active", 0.0)
 		return
 
 	var cs: int = _cell_size
-	var bx: int = _board_x
-	var by: int = _board_y
 	var ghost_y: int = controller.get_ghost_y()
 	var ghost_pos := Vector2i(controller.position.x, ghost_y)
 	var cells: Array[Vector2i] = controller.get_cells_at(ghost_pos, controller.rotation)
-	var color: Color = Constants.COLORS.get(controller.piece_type, Color.GRAY) as Color
+	if cells.size() < 4:
+		_board_material.set_shader_parameter("ghost_active", 0.0)
+		return
 
-	_ghost_container.visible = true
-	var idx: int = 0
+	var board_size := Vector2(Constants.COLS, Constants.VISIBLE_ROWS) * float(cs)
+	var p: Array = []
 	for cell in cells:
-		if idx >= _ghost_cells.size():
-			break
-		if cell.y >= 2:
-			_ghost_cells[idx].position = Vector2(bx + cell.x * cs, by + (cell.y - 2) * cs)
-			_ghost_cells[idx].size = Vector2(cs, cs)
-			_ghost_materials[idx].set_shader_parameter("fill_color", color)
-			_ghost_cells[idx].visible = true
-		else:
-			_ghost_cells[idx].visible = false
-		idx += 1
+		var c := Vector2(cell.x + 0.5, cell.y - 2.0 + 0.5) * float(cs)
+		p.append(c - board_size * 0.5)
+	var rounding: float = cs * 0.12
+	_board_material.set_shader_parameter("ghost_active", 1.0)
+	_board_material.set_shader_parameter("ghost_half", cs * 0.5 - rounding)
+	_board_material.set_shader_parameter("ghost_round", rounding)
+	_board_material.set_shader_parameter("ghost_cells_a", Vector4(p[0].x, p[0].y, p[1].x, p[1].y))
+	_board_material.set_shader_parameter("ghost_cells_b", Vector4(p[2].x, p[2].y, p[3].x, p[3].y))
 
 func _update_hud() -> void:
 	"""Update HUD label text. Called each frame during gameplay."""
@@ -772,6 +775,7 @@ func _position_all_nodes() -> void:
 		_board_material.set_shader_parameter("corner_radius_px", cs * 0.8)
 		_board_material.set_shader_parameter("bevel_px", cs * 2.0)
 		_board_material.set_shader_parameter("thickness_px", cs * 2.6)
+		_board_material.set_shader_parameter("hole_bevel_px", cs * 0.9)
 		if _bg_bake_size != get_viewport_rect().size:
 			_bake_board_bg()
 
