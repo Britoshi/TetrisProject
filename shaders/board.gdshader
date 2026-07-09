@@ -142,14 +142,13 @@ vec2 cell_data(vec2 cc) {
 		vec2((cc.x + 0.5) / 10.0, (cc.y + vanish_offset + 0.5) / 22.0)).rg;
 }
 
-float box_sdf2(vec2 rel, vec2 h) {
-	vec2 q = abs(rel) - h;
-	return length(max(q, vec2(0.0))) + min(max(q.x, q.y), 0.0);
-}
-
-// Axis-aligned box for one cell of a piece: padded on free sides, extended
-// past the cell boundary on connected sides, pre-shrunk by r (caller
-// inflates by r, which rounds convex corners and fillets concave ones).
+// Axis-aligned box for one cell of a piece: padded on free sides, reaching
+// r PAST the cell line on connected sides (deep overlap keeps the union's
+// interior seams strongly negative — no rim strokes or lens kinks on them).
+// Corners are rounded ONLY where both adjacent sides are free — connected
+// sides stay square so neighboring boxes union into straight seams: no
+// pinches, no bump arcs poking into empty diagonal cells (overshoot into
+// empty cells is never rendered, since empty cells draw no glass).
 float piece_cell_box(vec2 p, vec2 cc, int mask, float r) {
 	vec2 cd = rect_size / cell_count;
 	vec2 pad = cell_padding * cd;
@@ -159,8 +158,17 @@ float piece_cell_box(vec2 p, vec2 cc, int mask, float r) {
 	float yu = ((mask & 4) != 0) ? cd.y * 0.5 + r : cd.y * 0.5 - pad.y;
 	float yd = ((mask & 8) != 0) ? cd.y * 0.5 + r : cd.y * 0.5 - pad.y;
 	vec2 bc = center + vec2((xr - xl) * 0.5, (yd - yu) * 0.5);
-	vec2 bh = vec2((xl + xr) * 0.5, (yu + yd) * 0.5) - r;
-	return box_sdf2(p - bc, max(bh, vec2(0.5)));
+	vec2 bh = vec2((xl + xr) * 0.5, (yu + yd) * 0.5);
+	vec2 rel = p - bc;
+	// Squircle rounding on this pixel's quadrant-corner iff both sides free
+	int bx = rel.x > 0.0 ? 2 : 1;
+	int by = rel.y > 0.0 ? 8 : 4;
+	float cr = ((mask & bx) == 0 && (mask & by) == 0) ? r : 0.0;
+	vec2 q = abs(rel) - bh + cr;
+	float d = min(max(q.x, q.y), 0.0);
+	vec2 qc = max(q, vec2(0.0));
+	float corner_dist = pow(pow(qc.x, 2.5) + pow(qc.y, 2.5), 1.0 / 2.5);
+	return d + corner_dist - cr;
 }
 
 // Occupied-weighted bilinear blend of the four nearest cells' piece colors.
@@ -224,31 +232,7 @@ float merged_piece_sdf(vec2 p, vec2 cc0, int m0, float r) {
 			}
 		}
 	}
-	return d - r;
-}
-
-// Glass SDF as seen from an EMPTY cell: union of the three corner-sharing
-// neighbors' boxes (q = quadrant of the pixel within its cell). Junction
-// fillets spill up to r past the cell line into empty cells — without this
-// they get clipped mid-arc (missing outline bites at bends).
-float empty_cell_sdf(vec2 p, vec2 cc0, vec2 q, float r) {
-	float d = 1e6;
-	vec2 n1 = cc0 + vec2(q.x, 0.0);
-	vec2 n2 = cc0 + vec2(0.0, q.y);
-	vec2 n3 = cc0 + q;
-	vec2 t1 = cell_data(n1);
-	if (get_color(t1.r).a > 0.01) {
-		d = min(d, piece_cell_box(p, n1, int(t1.g + 0.5), r));
-	}
-	vec2 t2 = cell_data(n2);
-	if (get_color(t2.r).a > 0.01) {
-		d = min(d, piece_cell_box(p, n2, int(t2.g + 0.5), r));
-	}
-	vec2 t3 = cell_data(n3);
-	if (get_color(t3.r).a > 0.01) {
-		d = min(d, piece_cell_box(p, n3, int(t3.g + 0.5), r));
-	}
-	return d - r;
+	return d;
 }
 
 // Accumulate signed distance (+gradient) to one splash/wall cell —
@@ -449,12 +433,12 @@ void fragment() {
 		vec4 cc = get_color(cdata.r);
 		int cmask = int(cdata.g + 0.5);
 		float rr = 0.28 * min(cell_dim.x, cell_dim.y);
-		vec2 quad = sign(local_uv - 0.5);
-		bool occupied = cc.a > 0.01;
-		float tile_sdf = occupied
-			? merged_piece_sdf(px, cell_coord, cmask, rr)
-			: empty_cell_sdf(px, cell_coord, quad, rr);
-		float tile_alpha = 1.0 - smoothstep(-0.75, 0.75, tile_sdf);
+		float tile_sdf = 1e6;
+		float tile_alpha = 0.0;
+		if (cc.a > 0.01) {
+			tile_sdf = merged_piece_sdf(px, cell_coord, cmask, rr);
+			tile_alpha = 1.0 - smoothstep(-0.75, 0.75, tile_sdf);
+		}
 
 		// Grid line — barely-there etched line, hidden under glass
 		if (in_pad) {
@@ -464,23 +448,12 @@ void fragment() {
 		if (tile_alpha > 0.001) {
 			// Lens direction from the merged surface (numerical gradient)
 			// so refraction flows continuously across the whole piece
-			float dgx;
-			float dgy;
-			if (occupied) {
-				dgx = merged_piece_sdf(px + vec2(1.0, 0.0), cell_coord, cmask, rr) - tile_sdf;
-				dgy = merged_piece_sdf(px + vec2(0.0, 1.0), cell_coord, cmask, rr) - tile_sdf;
-			} else {
-				dgx = empty_cell_sdf(px + vec2(1.0, 0.0), cell_coord, quad, rr) - tile_sdf;
-				dgy = empty_cell_sdf(px + vec2(0.0, 1.0), cell_coord, quad, rr) - tile_sdf;
-			}
+			float dgx = merged_piece_sdf(px + vec2(1.0, 0.0), cell_coord, cmask, rr) - tile_sdf;
+			float dgy = merged_piece_sdf(px + vec2(0.0, 1.0), cell_coord, cmask, rr) - tile_sdf;
 			vec2 dirc = normalize(vec2(dgx, dgy) + vec2(1e-5, 0.0));
 
-			// Piece color: optionally melted into the neighbors' colors.
-			// Empty-cell fillet pixels always use the blend (no own color).
-			vec3 piece_col = blended_block_color(grid_pos);
-			if (occupied) {
-				piece_col = mix(cc.rgb, piece_col, block_color_blend);
-			}
+			// Piece color, optionally melted into the neighbors' colors
+			vec3 piece_col = mix(cc.rgb, blended_block_color(grid_pos), block_color_blend);
 
 			float half_min = min(cell_dim.x, cell_dim.y) * 0.5;
 			float wc = clamp(-tile_sdf / half_min, 0.0, 1.0);
@@ -498,8 +471,8 @@ void fragment() {
 			float rimc = 1.0 - smoothstep(0.0, 3.0, abs(tile_sdf));
 			tile_col = mix(tile_col, piece_col * (1.0 + block_emission), rimc * 0.85);
 
-			// Top sheen — only on occupied cells whose top edge is exposed
-			if (occupied && (cmask & 4) == 0) {
+			// Top sheen — only on cells whose top edge is exposed
+			if ((cmask & 4) == 0) {
 				vec2 inner_uv = (local_uv - pad_min) / (pad_max - pad_min);
 				tile_col += smoothstep(0.35, 0.0, inner_uv.y) * 0.08;
 			}

@@ -382,6 +382,8 @@ func _create_board_node() -> void:
 	_board_material.set_shader_parameter("warp_intensity", 1.2)
 	_board_material.set_shader_parameter("warp_strength", 4.0)
 	_board_material.set_shader_parameter("wall_warp_intensity", 0.3)
+	# Color melt between adjacent blocks: 0 = hard edges, 1 = full blend
+	_board_material.set_shader_parameter("block_color_blend", 0.45)
 	_board_material.set_shader_parameter("chromatic_strength", 3.0)
 	_board_material.set_shader_parameter("border_width", 1.5)
 	_board_material.set_shader_parameter("border_color", Color(1.0, 1.0, 1.0, 0.45))
