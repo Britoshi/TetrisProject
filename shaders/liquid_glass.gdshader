@@ -87,29 +87,33 @@ void fragment() {
 	vec2 warp_offset = uv_dir * warp_falloff * warp_intensity / 10.0;
 
 	// ── Waterdrop wobble: touch depression + release ripple ──
-	float touch_dist = length(UV - touch_uv);
+	// Pixel-corrected distance: truly circular regardless of button aspect ratio.
+	// Without this, effects stretch into ovals on non-square buttons.
+	vec2 delta_uv = UV - touch_uv;
+	vec2 delta_px = delta_uv * size;
+	float touch_dist = length(delta_px) / min(size.x, size.y);
 	float touch_ca_boost = 0.0;
 
 	if (touch_uv.x >= 0.0 && touch_depth > 0.005) {
-		vec2 touch_dir = touch_dist > 0.001 ? (touch_uv - UV) / touch_dist : vec2(0.0);
+		vec2 touch_dir = touch_dist > 0.001 ? -(delta_uv / length(delta_uv)) : vec2(0.0);
 
 		// Depression: wide inward bulge visible around fingertip
-		float depress_radius = 0.28 + touch_depth * 0.08;
+		float depress_radius = 0.43 + touch_depth * 0.12;
 		float depression = exp(-touch_dist * touch_dist / (depress_radius * depress_radius)) * touch_depth;
 		warp_offset += touch_dir * depression * 0.09;
 
-		// Ripple: expanding rings on press/release, wide enough to see
+		// Ripple: expanding rings on press/release
 		float time_since = TIME - touch_time;
 		float ripple_life = clamp(time_since * 2.0, 0.0, 1.0);
-		float ripple_radius = 0.15 + ripple_life * 0.55;
-		float ripple_width = 0.06 * (1.0 - ripple_life * 0.4);
+		float ripple_radius = 0.23 + ripple_life * 0.85;
+		float ripple_width = 0.09 * (1.0 - ripple_life * 0.4);
 		float ripple = smoothstep(ripple_radius - ripple_width, ripple_radius, touch_dist)
 		             - smoothstep(ripple_radius, ripple_radius + ripple_width, touch_dist);
 		ripple *= (1.0 - ripple_life) * touch_depth;
 		warp_offset += touch_dir * ripple * 0.05;
 
 		// Secondary ring
-		float r2_radius = ripple_radius - 0.12;
+		float r2_radius = ripple_radius - 0.18;
 		if (r2_radius > 0.0) {
 			float r2 = smoothstep(r2_radius - ripple_width * 0.7, r2_radius, touch_dist)
 			         - smoothstep(r2_radius, r2_radius + ripple_width * 0.5, touch_dist);
@@ -117,14 +121,14 @@ void fragment() {
 			warp_offset += touch_dir * r2 * 0.025;
 		}
 
-		// Ongoing micro-pulse while held (visible immediately, no delay)
-		float pulse = (sin(TIME * 7.0 + touch_dist * 15.0) * 0.018
-		             + cos(TIME * 11.0 - touch_dist * 10.0) * 0.012) * touch_depth
-		             * exp(-touch_dist * touch_dist * 12.0);
+		// Ongoing micro-pulse while held
+		float pulse = (sin(TIME * 7.0 + touch_dist * 10.0) * 0.018
+		             + cos(TIME * 11.0 - touch_dist * 6.5) * 0.012) * touch_depth
+		             * exp(-touch_dist * touch_dist * 5.0);
 		warp_offset += touch_dir * pulse;
 
-		// Chromatic aberration boost near touch (wider)
-		touch_ca_boost = exp(-touch_dist * touch_dist * 15.0) * touch_depth * 3.0;
+		// Chromatic aberration boost near touch
+		touch_ca_boost = exp(-touch_dist * touch_dist * 6.5) * touch_depth * 3.0;
 	}
 
 	vec2 warped_uv = SCREEN_UV - warp_offset;
@@ -158,7 +162,7 @@ void fragment() {
 
 	// ── Touch glow: warm light radiates from touch point ──
 	if (touch_uv.x >= 0.0 && touch_depth > 0.01) {
-		float touch_glow = exp(-touch_dist * touch_dist * 8.0) * touch_depth;
+		float touch_glow = exp(-touch_dist * touch_dist * 3.5) * touch_depth;
 		color += glow_color.rgb * touch_glow * glow_color.a * 0.8;
 	}
 

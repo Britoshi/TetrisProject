@@ -18,7 +18,8 @@
       "Bash(xxd)",
       "WebSearch",
       "WebFetch(domain:github.com)",
-      "WebFetch(domain:godotshaders.com)"
+      "WebFetch(domain:godotshaders.com)",
+      "Bash(git push *)"
     ]
   }
 }
