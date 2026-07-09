@@ -16,7 +16,7 @@ const GAP: float = 10.0
 const BOTTOM_MARGIN: float = 20.0
 const PANEL_PADDING: float = 14.0
 const BTN_ASPECT_DEFAULT: float = 0.65
-const BTN_CORNER_RADIUS: int = 12
+const BTN_CORNER_RADIUS_FRAC: float = 0.28
 const SETTINGS_CORNER_RADIUS: int = 10
 const PANEL_CORNER_RADIUS: int = 8
 
@@ -116,7 +116,7 @@ var _edit_hint_label: Label = null
 # Style helpers
 # ═══════════════════════════════════════════════════════════
 
-func _make_shadow_style(corner_r: int = BTN_CORNER_RADIUS) -> StyleBoxFlat:
+func _make_shadow_style(corner_r: int = 14) -> StyleBoxFlat:
 	"""Create a transparent-fill StyleBoxFlat that only casts a drop shadow."""
 	var s := StyleBoxFlat.new()
 	s.corner_radius_top_left = corner_r
@@ -423,9 +423,9 @@ func _position_button(i: int, rect: Rect2) -> void:
 	_btn_bodies[i].position = Vector2.ZERO
 	_btn_bodies[i].size = rect.size
 
-	# Shape uniforms (depend on pixel size)
-	var px_radius := float(BTN_CORNER_RADIUS) / maxf(rect.size.x, 1.0)
-	_btn_shaders[i].set_shader_parameter("corner_radius", px_radius)
+	# Shape uniforms — corner radius as fraction of smaller dimension (Apple-like)
+	var min_dim := minf(rect.size.x, rect.size.y)
+	_btn_shaders[i].set_shader_parameter("corner_radius", BTN_CORNER_RADIUS_FRAC * (min_dim / maxf(rect.size.x, 1.0)))
 
 	# Theme uniforms
 	_apply_theme_to_button(i)

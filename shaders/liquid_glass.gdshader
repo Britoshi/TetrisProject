@@ -35,11 +35,17 @@ uniform float pressed : hint_range(0.0, 1.0) = 0.0;
 uniform vec4 glow_color : source_color = vec4(1.0, 0.9, 0.5, 0.7);
 
 
-// ── Signed distance field for rounded rectangle ──
+// ── Signed distance field for continuous-corner rounded rectangle ──
+// Uses a squircle blend (exponent ~2.5) for Apple-style smooth corners
+// where curvature ramps from 0 (edge) to max (corner) with no visible seam.
 // p = point relative to center, b = half-size, r = corner radius
 float rounded_box_sdf(vec2 p, vec2 b, float r) {
 	vec2 q = abs(p) - b + r;
-	return min(max(q.x, q.y), 0.0) + length(max(q, vec2(0.0))) - r;
+	float d = min(max(q.x, q.y), 0.0);
+	vec2 corner = max(q, vec2(0.0));
+	// Higher exponent = tighter to true rounded rect; 2.5 gives Apple-like continuity
+	float corner_dist = pow(pow(corner.x, 2.5) + pow(corner.y, 2.5), 1.0 / 2.5);
+	return d + corner_dist - r;
 }
 
 
