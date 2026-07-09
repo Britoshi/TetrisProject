@@ -59,6 +59,7 @@ uniform vec4 ghost_cells_b = vec4(0.0);
 uniform float ghost_half = 12.0;                              // cell half-size minus rounding
 uniform float ghost_round = 4.0;                              // hole corner rounding
 uniform float hole_bevel_px : hint_range(1.0, 200.0) = 34.0;  // lens rim width around the hole
+uniform float hole_tilt : hint_range(0.0, 1.0) = 0.35;        // hole rim refraction strength
 uniform float saturation : hint_range(0.5, 2.0) = 1.35;      // vibrancy
 uniform float brightness : hint_range(0.5, 1.5) = 1.06;
 uniform float spec_intensity : hint_range(0.0, 3.0) = 1.0;
@@ -118,14 +119,6 @@ float hole_sdf(vec2 p) {
 	return d - ghost_round;
 }
 
-// Normalized depth to the nearest glass edge (outer rim or hole rim),
-// each scaled by its own bevel width. 0 at an edge, >= 1 in flat glass.
-float glass_depth(vec2 p) {
-	float b = -board_sdf(p, rect_size * 0.5, corner_radius_px) / max(bevel_px, 1.0);
-	float h = hole_sdf(p) / max(hole_bevel_px, 1.0);
-	return min(b, h);
-}
-
 // Accumulate the signed distance (and its gradient) to one splash cell —
 // an axis-aligned square of half-size hc. Union via min.
 void cell_sdf(vec2 rel, float hc, inout float sd, inout vec2 sg) {
@@ -160,7 +153,8 @@ void fragment() {
 
 	// Slab with the ghost hole cut out: max(board, -hole)
 	float bsdf = board_sdf(px, half_size, corner_radius_px);
-	float csdf = max(bsdf, -hole_sdf(px));
+	float hs = hole_sdf(px);
+	float csdf = max(bsdf, -hs);
 
 	// 1.5px anti-aliased edge (outer rim AND hole rim — hole is truly
 	// transparent, the real background layer shows through)
@@ -169,17 +163,28 @@ void fragment() {
 		discard;
 
 	// ── Surface normal of the glass slab ──
-	// Depth field: 0 at the nearest edge (outer or hole), 1 in flat glass.
-	// Its gradient points inward; the bevel normal tilts outward.
-	float d0 = glass_depth(px);
-	float ddx = glass_depth(px + vec2(1.0, 0.0)) - glass_depth(px - vec2(1.0, 0.0));
-	float ddy = glass_depth(px + vec2(0.0, 1.0)) - glass_depth(px - vec2(0.0, 1.0));
-	vec2 grad = -normalize(vec2(ddx, ddy) + vec2(1e-5, 0.0));
+	// Outer rim: full rolled-edge lens (SDF gradient, central differences)
+	float gx = board_sdf(px + vec2(1.0, 0.0), half_size, corner_radius_px)
+	         - board_sdf(px - vec2(1.0, 0.0), half_size, corner_radius_px);
+	float gy = board_sdf(px + vec2(0.0, 1.0), half_size, corner_radius_px)
+	         - board_sdf(px - vec2(0.0, 1.0), half_size, corner_radius_px);
+	vec2 grad_o = normalize(vec2(gx, gy) + vec2(1e-5, 0.0));
+	float bev_out = clamp(1.0 + bsdf / bevel_px, 0.0, 1.0);
 
-	// Circular bevel profile: normal tilts fully sideways at either rim,
-	// flattens to straight-up one bevel-width in.
-	float bev = 1.0 - clamp(d0, 0.0, 1.0);
-	vec2 lat = grad * bev;
+	// Hole rim: much gentler meniscus tilt toward the cutout
+	float bev_hole = 0.0;
+	vec2 lat_hole = vec2(0.0);
+	if (ghost_active > 0.5) {
+		float hx = hole_sdf(px + vec2(1.0, 0.0)) - hole_sdf(px - vec2(1.0, 0.0));
+		float hy = hole_sdf(px + vec2(0.0, 1.0)) - hole_sdf(px - vec2(0.0, 1.0));
+		vec2 grad_h = -normalize(vec2(hx, hy) + vec2(1e-5, 0.0)); // toward the hole
+		bev_hole = clamp(1.0 - hs / hole_bevel_px, 0.0, 1.0);
+		bev_hole *= bev_hole; // eased ramp, gentle shoulder
+		lat_hole = grad_h * bev_hole * hole_tilt;
+	}
+
+	float bev = max(bev_out, bev_hole);
+	vec2 lat = grad_o * bev_out + lat_hole;
 
 	// ── Water surface: sum of travelling directional waves ──
 	// Four octaves: slow swell (~300px), waves (~150px), chop (~75px),

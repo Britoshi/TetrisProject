@@ -373,6 +373,7 @@ func _create_board_node() -> void:
 	_board_material.set_shader_parameter("flash_rows", Vector4(-1.0, -1.0, -1.0, -1.0))
 	_board_material.set_shader_parameter("splash_strength", 0.7)
 	_board_material.set_shader_parameter("splash_speed_px", 240.0)
+	_board_material.set_shader_parameter("hole_tilt", 0.35)
 	_push_splash_uniform()
 
 	# Data texture (10x22, FORMAT_RF = 32-bit float per pixel)
