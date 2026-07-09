@@ -803,26 +803,37 @@ func _release_normal_touch(index: int) -> void:
 
 
 func _drag_normal(pos: Vector2, index: int) -> void:
-	"""Update wobble touch point as finger slides; cross-fade to adjacent buttons."""
+	"""Update wobble touch point as finger slides; re-trigger on re-enter, cross-fade between buttons."""
 	if not (index in _touch_map):
 		return
 	var ci: int = _touch_map[index]
 
-	# If finger is still on the same button, just update the UV
+	# Finger is on the same button
 	if _btn_rects[ci].has_point(pos):
 		var uv := Vector2((pos.x - _btn_rects[ci].position.x) / _btn_rects[ci].size.x,
 						  (pos.y - _btn_rects[ci].position.y) / _btn_rects[ci].size.y)
 		_wobble_touch_uv[ci] = uv
+		# Re-trigger press + wobble if we had left this button (target was decaying to 0)
+		if _wobble_target[ci] < 0.5:
+			_haptic_pulse()
+			Input.action_press(_btn_actions[ci])
+			_btn_pressed[ci] = true
+			_btn_shaders[ci].set_shader_parameter("pressed", 1.0)
+			_wobble_target[ci] = 1.0
+			_wobble_event_time[ci] = _elapsed
 		return
 
-	# Finger slid to another button — release current, press new
-	Input.action_release(_btn_actions[ci])
-	_btn_shaders[ci].set_shader_parameter("pressed", 0.0)
-	_wobble_target[ci] = 0.0
-	_wobble_event_time[ci] = _elapsed
+	# Finger left current button — release action (but keep touch_map for re-entry detection)
+	if _wobble_target[ci] > 0.5:
+		Input.action_release(_btn_actions[ci])
+		_btn_pressed[ci] = false
+		_btn_shaders[ci].set_shader_parameter("pressed", 0.0)
+		_wobble_target[ci] = 0.0
+		_wobble_event_time[ci] = _elapsed
 
+	# Check if finger entered a different button
 	for i in range(_btn_rects.size()):
-		if _btn_rects[i].has_point(pos):
+		if i != ci and _btn_rects[i].has_point(pos):
 			_haptic_pulse()
 			Input.action_press(_btn_actions[i])
 			_touch_map[index] = i
@@ -835,6 +846,7 @@ func _drag_normal(pos: Vector2, index: int) -> void:
 			_wobble_event_time[i] = _elapsed
 			return
 
+	# Finger is in empty space — keep touch_map so re-entry to same button works
 
 # ── SETTINGS mode ──
 
