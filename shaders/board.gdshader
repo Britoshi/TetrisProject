@@ -79,9 +79,8 @@ uniform vec4 color_7 : source_color = vec4(1.0, 0.55, 0.0, 1.0);
 uniform vec4 flash_rows = vec4(-1.0);
 uniform float flash_intensity : hint_range(0.0, 1.0) = 0.0;
 
-// ── Block glow (shader-side halo, no post-processing needed) ──
-uniform float block_emission : hint_range(0.0, 4.0) = 0.9;
-uniform float glow_radius_px : hint_range(1.0, 120.0) = 24.0;
+// ── Block emission: blocks output HDR (> 1.25) so ONLY they bloom ──
+uniform float block_emission : hint_range(0.0, 4.0) = 1.2;
 
 // ── Squircle SDF (identical to the button's rounded_box_sdf) ──
 float rounded_box_sdf(vec2 p, vec2 b, float r) {
@@ -273,13 +272,6 @@ void fragment() {
 	// ── Tint the glass (button-identical) ──
 	vec3 color = mix(bg, glass_tint.rgb, glass_tint.a);
 
-	// ── Block glow: colored halo bleeding from nearby blocks ──
-	if (wall_sd < 1e5 && block_emission > 0.001) {
-		vec3 bcol = get_color(near_type).rgb;
-		float halo = exp(-max(wall_sd, 0.0) / glow_radius_px);
-		color += bcol * halo * block_emission * 0.6;
-	}
-
 	// ── Edge rim light (button-identical, traces walls too) ──
 	float rim = (1.0 - smoothstep(0.0, border_width, -sdf)) * step(sdf, 0.0);
 	rim *= rim_intensity;
@@ -316,14 +308,15 @@ void fragment() {
 
 			vec4 cc = get_color(piece_type);
 			if (cc.a > 0.01) {
-				// Piece color, gently lifted (LDR-safe, no white clamp)
-				color = min(cc.rgb * 1.15, vec3(1.0));
+				// Piece color in HDR: only these pixels cross the bloom
+				// threshold, so only blocks emit — nothing else glows.
+				color = cc.rgb * (1.0 + block_emission);
 
 				// Flash
 				if (flash_intensity > 0.01) {
 					if (cell_coord.y == flash_rows.x || cell_coord.y == flash_rows.y ||
 					    cell_coord.y == flash_rows.z || cell_coord.y == flash_rows.w) {
-						color = mix(color, vec3(1.0), flash_intensity * 0.8);
+						color = mix(color, vec3(2.0), flash_intensity * 0.8);
 					}
 				}
 				// Subtle highlight

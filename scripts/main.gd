@@ -131,8 +131,25 @@ func _ready() -> void:
 	print("  controller created")
 	_load_sprint_records()
 	_setup_background()
+	_setup_glow_environment()
 	_create_render_nodes()
 	print("=== _ready() done — state: SPRINT_MENU ===")
+
+func _setup_glow_environment() -> void:
+	"""Bloom for emissive blocks. glow_bloom MUST stay 0.0 — any higher
+	blooms the entire screen (that was the white-wash bug). With it at 0,
+	ONLY pixels above glow_hdr_threshold (i.e. the emissive blocks) glow."""
+	var env := Environment.new()
+	env.glow_enabled = true
+	env.glow_bloom = 0.0
+	env.glow_hdr_threshold = 1.25
+	env.glow_intensity = 1.0
+	env.glow_strength = 1.0
+	env.glow_blend_mode = Environment.GLOW_BLEND_MODE_ADDITIVE
+	var we := WorldEnvironment.new()
+	we.name = "GlowEnvironment"
+	we.environment = env
+	add_child(we)
 
 func _setup_input_actions() -> void:
 	# Only set up once
@@ -358,7 +375,7 @@ func _create_board_node() -> void:
 	_board_material.set_shader_parameter("wave_strength", 0.3)
 	_board_material.set_shader_parameter("wave_speed", 1.0)
 	_board_material.set_shader_parameter("wave_scale", 1.0)
-	_board_material.set_shader_parameter("block_emission", 0.9)
+	_board_material.set_shader_parameter("block_emission", 1.2)
 
 	# Colors from Constants.COLORS
 	var c := Constants.COLORS
@@ -393,7 +410,7 @@ func _create_piece_cells() -> void:
 	_game_layer.add_child(_piece_container)
 
 	for i in range(4):
-		var cr := _make_piece_cell(Color.WHITE, 1.0, 0.4, -1.0, 0.2)
+		var cr := _make_piece_cell(Color.WHITE, 1.0, 0.4, -1.0, 1.2)
 		_piece_container.add_child(cr)
 		_piece_cells.append(cr)
 		_piece_materials.append(cr.material as ShaderMaterial)
@@ -776,7 +793,6 @@ func _position_all_nodes() -> void:
 		_board_material.set_shader_parameter("rect_size", Vector2(board_w, board_h))
 		_board_material.set_shader_parameter("corner_radius_px", cs * 0.8)
 		_board_material.set_shader_parameter("hole_bevel_px", cs * 0.9)
-		_board_material.set_shader_parameter("glow_radius_px", cs * 0.7)
 		if _bg_bake_size != get_viewport_rect().size:
 			_bake_board_bg()
 
