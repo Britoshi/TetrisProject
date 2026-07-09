@@ -515,7 +515,7 @@ func _update_hold_preview() -> void:
 		return
 
 	var preview_cs: int = maxi(4, _cell_size / 2)
-	var offsets: Array[Vector2i] = piece_data.CELLS[_held_piece_type][0] as Array[Vector2i]
+	var offsets: Array = piece_data.CELLS[_held_piece_type][0]
 	var color: Color = Constants.COLORS.get(_held_piece_type, Color.GRAY) as Color
 
 	for i in range(4):
@@ -543,7 +543,7 @@ func _update_next_preview() -> void:
 		_next_sub_containers[i].visible = true
 		var p_type: int = next_pieces[i]
 		var color: Color = Constants.COLORS.get(p_type, Color.GRAY) as Color
-		var offsets: Array[Vector2i] = piece_data.CELLS[p_type][0] as Array[Vector2i]
+		var offsets: Array = piece_data.CELLS[p_type][0]
 		for j in range(4):
 			if j >= _next_cells[i].size():
 				break
