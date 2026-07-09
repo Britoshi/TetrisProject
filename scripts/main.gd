@@ -3,8 +3,8 @@
 extends Node2D
 
 # ── Game state ──
-enum State { PLAYING, LINE_CLEAR, GAME_OVER }
-var state: int = State.PLAYING
+enum State { SPRINT_MENU, PLAYING, LINE_CLEAR, GAME_OVER, SPRINT_COMPLETE }
+var state: int = State.SPRINT_MENU
 
 # ── Core objects ──
 var board: Board
@@ -16,6 +16,15 @@ var piece_data: Node  # PieceData autoload reference
 var score: int = 0
 var lines_cleared: int = 0
 var level: int = 1
+
+# ── Sprint mode ──
+const SPRINT_TARGETS: Array[int] = [20, 40, 100, 200]
+const SPRINT_SAVE_PATH: String = "user://sprint_records.cfg"
+var sprint_target: int = 0               # 0 = menu, then 20/40/100/200
+var sprint_time: float = 0.0             # elapsed seconds in current sprint
+var sprint_records: Dictionary = {}      # {20: 45.2, 40: 90.1, ...}
+var _menu_target_rects: Array[Rect2] = [] # hit-test rects for sprint menu
+var _sprint_new_record: bool = false      # true if this run set a record
 
 # ── Hold (stash) ──
 var _held_piece_type: int = Constants.PieceType.EMPTY
@@ -41,6 +50,11 @@ var _board_x: int = 100
 var _board_y: int = 20
 var _font_scale: float = 1.0
 
+# ── Background image ──
+var _bg_layer: CanvasLayer = null
+var _bg_rect: TextureRect = null
+var _bg_ok: bool = false
+
 
 # ── Init ──
 
@@ -61,8 +75,9 @@ func _ready() -> void:
 	print("  bag created")
 	controller = PieceController.new(board, piece_data)
 	print("  controller created")
-	_spawn_next_piece()
-	print("=== _ready() done — state:", state, "piece:", controller.piece_type, "pos:", controller.position, "===")
+	_load_sprint_records()
+	_setup_background()
+	print("=== _ready() done — state: SPRINT_MENU ===")
 
 
 func _setup_input_actions() -> void:
@@ -110,6 +125,24 @@ func _create_input_event(action: String, keycode: int) -> void:
 	InputMap.action_add_event(action, ev)
 
 
+func _input(event: InputEvent) -> void:
+	match state:
+		State.SPRINT_MENU:
+			if event is InputEventKey and event.pressed and not event.echo:
+				for i in range(SPRINT_TARGETS.size()):
+					if event.keycode == KEY_1 + i:
+						_start_sprint(SPRINT_TARGETS[i])
+						return
+			if event is InputEventScreenTouch and event.pressed:
+				for i in range(_menu_target_rects.size()):
+					if _menu_target_rects[i].has_point(event.position):
+						_start_sprint(SPRINT_TARGETS[i])
+						return
+		State.SPRINT_COMPLETE:
+			if (event is InputEventKey and event.pressed) or (event is InputEventScreenTouch and event.pressed):
+				_restart()
+
+
 func _update_layout() -> void:
 	var vp_size := get_viewport_rect().size
 	if vp_size.x <= 0:
@@ -119,6 +152,39 @@ func _update_layout() -> void:
 	_board_x = layout.board_x
 	_board_y = layout.board_y
 	_font_scale = layout.font_scale
+	_fit_background()
+
+
+# ── Background image ──
+
+func _setup_background() -> void:
+	_bg_layer = CanvasLayer.new()
+	_bg_layer.layer = -1
+	_bg_layer.name = "BackgroundLayer"
+	add_child(_bg_layer)
+
+	_bg_rect = TextureRect.new()
+	_bg_rect.name = "BackgroundImage"
+	_bg_rect.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_COVERED
+	_bg_rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_bg_layer.add_child(_bg_rect)
+
+	var tex := load("res://videos/azure-horizon.png") as Texture2D
+	if tex:
+		_bg_rect.texture = tex
+		_bg_ok = true
+		_fit_background()
+		print("Background image loaded")
+	else:
+		push_warning("Background image not found, using dark fill fallback")
+
+
+func _fit_background() -> void:
+	if not _bg_ok or _bg_rect == null:
+		return
+	var vp := get_viewport_rect()
+	_bg_rect.position = Vector2.ZERO
+	_bg_rect.size = vp.size
 
 
 # ── Spawning ──
@@ -149,7 +215,7 @@ func _process(delta: float) -> void:
 	_frame_count += 1
 	if _frame_count == 1:
 		print("  FIRST _process() frame — delta:", delta)
-	if _frame_count % 60 == 1:
+	if _frame_count % 60 == 1 and state != State.SPRINT_MENU:
 		print("Frame %d — state: %d, piece: %d, pos: %s, grav: %.2f, ground: %s" % [
 			_frame_count, state,
 			controller.piece_type if controller else -1,
@@ -159,17 +225,25 @@ func _process(delta: float) -> void:
 		])
 
 	match state:
+		State.SPRINT_MENU:
+			pass  # input handled via _input()
 		State.PLAYING:
 			_process_playing(delta)
 		State.LINE_CLEAR:
 			_process_line_clear(delta)
 		State.GAME_OVER:
 			_process_game_over(delta)
+		State.SPRINT_COMPLETE:
+			pass  # input handled via _input()
 
 	queue_redraw()
 
 
 func _process_playing(delta: float) -> void:
+	# ── Sprint timer ──
+	if sprint_target > 0:
+		sprint_time += delta
+
 	# ── Input ──
 	if Input.is_action_just_pressed("tetris_hard_drop"):
 		_hard_drop()
@@ -248,7 +322,7 @@ func _process_line_clear(delta: float) -> void:
 
 
 func _process_game_over(_delta: float) -> void:
-	# Also restarts on hard drop / mobile hard-drop button
+	# Hard drop or restart returns to sprint menu
 	if Input.is_action_just_pressed("tetris_hard_drop") or Input.is_action_just_pressed("tetris_restart"):
 		_restart()
 
@@ -339,14 +413,17 @@ func _lock_piece() -> void:
 		print("GAME OVER — vanish zone breached")
 		return
 
-	# Line clear
+	# Line clear (instant — no pause)
 	cleared_row_indices = board.clear_lines()
 	if cleared_row_indices.size() > 0:
 		_score_lines(cleared_row_indices.size(), tspin)
-		state = State.LINE_CLEAR
-		line_clear_timer = 0.3
-	else:
-		_spawn_next_piece()
+
+	# Sprint completion check
+	if sprint_target > 0 and lines_cleared >= sprint_target:
+		_finish_sprint()
+		return
+
+	_spawn_next_piece()
 
 
 func _do_clear_lines() -> void:
@@ -354,18 +431,54 @@ func _do_clear_lines() -> void:
 
 
 func _restart() -> void:
+	_restart_game_only()
+	# Return to sprint menu
+	sprint_target = 0
+	sprint_time = 0.0
+	state = State.SPRINT_MENU
+
+
+func _restart_game_only() -> void:
+	"""Reset board/score/level but keep sprint target. Used by _start_sprint."""
 	board = Board.new()
+	controller.board = board
 	bag.reset()
 	score = 0
 	lines_cleared = 0
 	level = 1
 	gravity_acc = 0.0
+	das_left_acc = 0.0; das_left_active = false
+	das_right_acc = 0.0; das_right_active = false
 	_held_piece_type = Constants.PieceType.EMPTY
 	_spawn_next_piece()
-	state = State.PLAYING
 
 
-# ── Scoring ──
+func _start_sprint(target: int) -> void:
+	"""Begin a new sprint with the given line target."""
+	sprint_target = target
+	sprint_time = 0.0
+	_sprint_new_record = false
+	_restart_game_only()
+
+
+func _finish_sprint() -> void:
+	"""Called when lines_cleared >= sprint_target. Checks/saves record."""
+	var current_best: float = sprint_records.get(sprint_target, INF)
+	_sprint_new_record = sprint_time < current_best
+	if _sprint_new_record:
+		sprint_records[sprint_target] = sprint_time
+		_save_sprint_records()
+	state = State.SPRINT_COMPLETE
+
+
+func _format_time(seconds: float) -> String:
+	if seconds < 60.0:
+		return "%.1fs" % seconds
+	var mins := int(seconds) / 60
+	var secs := int(seconds) % 60
+	var tenths := int(fmod(seconds, 1.0) * 10)
+	return "%d:%02d.%d" % [mins, secs, tenths]
+
 
 func _score_lines(line_count: int, is_tspin: bool) -> void:
 	var base: int
@@ -389,6 +502,25 @@ func _get_gravity_interval() -> float:
 	return Constants.GRAVITY_SPEEDS[idx]
 
 
+
+
+func _load_sprint_records() -> void:
+	"""Load best sprint times from config file."""
+	var cfg := ConfigFile.new()
+	if cfg.load(SPRINT_SAVE_PATH) != OK:
+		return
+	for target in SPRINT_TARGETS:
+		var val: float = cfg.get_value("records", str(target), 0.0)
+		if val > 0.0:
+			sprint_records[target] = val
+
+
+func _save_sprint_records() -> void:
+	"""Persist all sprint records to config file."""
+	var cfg := ConfigFile.new()
+	for target in sprint_records:
+		cfg.set_value("records", str(target), sprint_records[target])
+	cfg.save(SPRINT_SAVE_PATH)
 # ── Rendering ──
 
 var _draw_count: int = 0
@@ -410,9 +542,15 @@ func _draw() -> void:
 	var font_m: int = int(16 * _font_scale)
 	var font_l: int = int(24 * _font_scale)
 
-	# Full background fill — confirms _draw() is running
+	# Full background fill — only when video isn't available
 	var vp_rect = get_viewport_rect()
-	draw_rect(Rect2(Vector2.ZERO, vp_rect.size), Color(0.1, 0.1, 0.15))
+	if not _bg_ok:
+		draw_rect(Rect2(Vector2.ZERO, vp_rect.size), Color(0.1, 0.1, 0.15))
+
+	# Sprint menu — full-screen, skip all game rendering
+	if state == State.SPRINT_MENU:
+		_draw_sprint_menu(font_s, font_m, font_l)
+		return
 
 	# Board background
 	var board_width: int = Constants.COLS * cs
@@ -454,53 +592,76 @@ func _draw() -> void:
 			if visible_row >= 0:
 				var flash_rect := Rect2(bx, by + visible_row * cs, board_width, cs)
 				draw_rect(flash_rect, Color.WHITE, false, 2.0)
+	var font = ThemeDB.fallback_font
+	var board_center_x: float = bx + board_width / 2.0
+	var board_center_y: float = by + board_height / 2.0
+	var right_x: int = bx + board_width + margin
+	var hold_x: int = bx - cs * 2 - margin
+	if hold_x < 0:
+		hold_x = margin
 
 	# Game over overlay
 	if state == State.GAME_OVER:
 		draw_rect(Rect2(bx - 2, by - 2, board_width + 4, board_height + 4), Color.RED, false, 3.0)
-		var font = ThemeDB.fallback_font
 		var go_text := "GAME OVER"
 		var go_size := font.get_string_size(go_text, HORIZONTAL_ALIGNMENT_CENTER, -1, font_l)
-		draw_string(font, Vector2(bx + (board_width - go_size.x) / 2.0, by + board_height / 2 - go_size.y),
-			go_text, HORIZONTAL_ALIGNMENT_LEFT, -1, font_l, Color.RED)
-		var restart_text := "Tap ⬇ to Restart"
-		var restart_size := font.get_string_size(restart_text, HORIZONTAL_ALIGNMENT_CENTER, -1, font_m)
-		draw_string(font, Vector2(bx + (board_width - restart_size.x) / 2.0, by + board_height / 2 + 10),
-			restart_text, HORIZONTAL_ALIGNMENT_LEFT, -1, font_m, Color(1.0, 1.0, 1.0, 0.7))
+		draw_string(font, Vector2(board_center_x, board_center_y - go_size.y - 4),
+			go_text, HORIZONTAL_ALIGNMENT_CENTER, -1, font_l, Color.RED)
+		var restart_text := "Tap ⬇ or R for Menu"
+		draw_string(font, Vector2(board_center_x, board_center_y + 8),
+			restart_text, HORIZONTAL_ALIGNMENT_CENTER, -1, font_m, Color(1.0, 1.0, 1.0, 0.7))
+		# Sprint progress during game over
+		if sprint_target > 0:
+			var prog_text := "Cleared %d/%d lines in %s" % [lines_cleared, sprint_target, _format_time(sprint_time)]
+			draw_string(font, Vector2(board_center_x, board_center_y + 8 + font_m + 6),
+				prog_text, HORIZONTAL_ALIGNMENT_CENTER, -1, font_s, Color(1.0, 1.0, 1.0, 0.5))
 
-	# Score display
-	var font = ThemeDB.fallback_font
-	var right_x: int = bx + board_width + margin
-	draw_string(font, Vector2(right_x, by + cs),
+	# Sprint complete overlay
+	if state == State.SPRINT_COMPLETE:
+		_draw_sprint_complete(font, font_s, font_m, font_l, board_center_x, board_center_y, board_width)
+		return
+
+	# Score display (right side, below board top)
+	var score_y: float = by + cs + font_m
+	var line_h: float = font_m + 8
+	draw_string(font, Vector2(right_x, score_y),
 		"Score: %d" % score, HORIZONTAL_ALIGNMENT_LEFT, -1, font_m)
-	draw_string(font, Vector2(right_x, by + cs + font_m + 6),
-		"Lines: %d" % lines_cleared, HORIZONTAL_ALIGNMENT_LEFT, -1, font_m)
-	draw_string(font, Vector2(right_x, by + cs + (font_m + 6) * 2),
-		"Level: %d" % level, HORIZONTAL_ALIGNMENT_LEFT, -1, font_m)
+	if sprint_target > 0:
+		draw_string(font, Vector2(right_x, score_y + line_h),
+			"Lines: %d/%d" % [lines_cleared, sprint_target], HORIZONTAL_ALIGNMENT_LEFT, -1, font_m)
+	else:
+		draw_string(font, Vector2(right_x, score_y + line_h),
+			"Lines: %d" % lines_cleared, HORIZONTAL_ALIGNMENT_LEFT, -1, font_m)
+	if sprint_target > 0:
+		draw_string(font, Vector2(right_x, score_y + line_h * 2),
+			"Time: %s" % _format_time(sprint_time), HORIZONTAL_ALIGNMENT_LEFT, -1, font_m)
+		draw_string(font, Vector2(right_x, score_y + line_h * 3),
+			"Level: %d" % level, HORIZONTAL_ALIGNMENT_LEFT, -1, font_m)
+	else:
+		draw_string(font, Vector2(right_x, score_y + line_h * 2),
+			"Level: %d" % level, HORIZONTAL_ALIGNMENT_LEFT, -1, font_m)
 
-	# Hold piece display
-	var hold_x: int = bx - cs * 2 - margin
-	if hold_x < 0:
-		hold_x = margin
+	# Hold piece display (left side)
 	var hold_label := "Hold"
-	var font2 = ThemeDB.fallback_font
-	draw_string(font2, Vector2(hold_x, by + cs), hold_label,
-		HORIZONTAL_ALIGNMENT_LEFT, -1, font_s)
+	draw_string(font, Vector2(hold_x, by + cs + font_s),
+		hold_label, HORIZONTAL_ALIGNMENT_LEFT, -1, font_s)
 	if _held_piece_type != Constants.PieceType.EMPTY:
 		var hold_color = Constants.COLORS.get(_held_piece_type, Color.GRAY)
 		if _hold_locked:
 			hold_color.a = 0.35
 		var hold_offsets = piece_data.CELLS[_held_piece_type][0]
-		var hy: int = by + cs + font_s + margin
+		var hy: int = by + cs + font_s + font_m + margin
 		for off in hold_offsets:
 			var hpx: int = hold_x + off.x * (cs / 2)
 			draw_rect(Rect2(hpx, hy + off.y * (cs / 2), cs / 2, cs / 2), hold_color)
 			draw_rect(Rect2(hpx, hy + off.y * (cs / 2), cs / 2, cs / 2), Color.BLACK, false, 1.0)
 
-	# Next piece preview
-	if state != State.GAME_OVER:
+	# Next piece preview (right side, below score)
+	if state != State.GAME_OVER and state != State.SPRINT_COMPLETE:
 		var next_pieces = bag.peek_next(3)
-		var next_y: int = by + cs + (font_m + 6) * 3 + margin
+		var next_y: float = score_y + line_h * 3 + margin
+		if sprint_target > 0:
+			next_y += line_h  # extra line for timer
 		draw_string(font, Vector2(right_x, next_y),
 			"Next:", HORIZONTAL_ALIGNMENT_LEFT, -1, font_s)
 		for i in range(next_pieces.size()):
@@ -512,6 +673,101 @@ func _draw() -> void:
 				var px: int = right_x + off.x * (cs / 2)
 				draw_rect(Rect2(px, py + off.y * (cs / 2), cs / 2, cs / 2), preview_color)
 				draw_rect(Rect2(px, py + off.y * (cs / 2), cs / 2, cs / 2), Color.BLACK, false, 1.0)
+func _draw_sprint_menu(font_s: int, font_m: int, font_l: int) -> void:
+	var font := ThemeDB.fallback_font
+	var vp_rect := get_viewport_rect()
+	var cx := vp_rect.size.x / 2.0
+
+	# Title
+	var title := "SPRINT MODE"
+	var title_y := vp_rect.size.y * 0.12
+	draw_string(font, Vector2(cx, title_y),
+		title, HORIZONTAL_ALIGNMENT_CENTER, -1, font_l + 8, Color.WHITE)
+
+	var sub := "Select Target"
+	draw_string(font, Vector2(cx, title_y + font_l + 14),
+		sub, HORIZONTAL_ALIGNMENT_CENTER, -1, font_m, Color(1.0, 1.0, 1.0, 0.6))
+
+	# Target buttons
+	var btn_w := minf(vp_rect.size.x * 0.55, 280.0)
+	var btn_h := 52.0
+	var btn_gap := 12.0
+	var total_h := float(SPRINT_TARGETS.size()) * btn_h + float(SPRINT_TARGETS.size() - 1) * btn_gap
+	var start_y := title_y + font_l + 14 + font_m + 24
+
+	_menu_target_rects.clear()
+
+	for i in range(SPRINT_TARGETS.size()):
+		var target := SPRINT_TARGETS[i]
+		var bx := cx - btn_w / 2.0
+		var by := start_y + float(i) * (btn_h + btn_gap)
+		var rect := Rect2(bx, by, btn_w, btn_h)
+		_menu_target_rects.append(rect)
+
+		# Button fill
+		draw_rect(rect, Color(0.2, 0.25, 0.38, 1.0), true)
+		draw_rect(rect, Color(1.0, 1.0, 1.0, 0.2), false, 2.0)
+
+		# Label: "40 Lines"
+		var label := "%d Lines" % target
+		# Show best time if available
+		if sprint_records.has(target):
+			var best_t: float = sprint_records[target]
+			label += "    (best: %s)" % _format_time(best_t)
+
+		var btn_fs := int(16 * _font_scale)
+		var label_s := font.get_string_size(label, HORIZONTAL_ALIGNMENT_CENTER, -1, btn_fs)
+		draw_string(font, Vector2(cx, by + btn_h / 2.0 - label_s.y / 2.0 + 2),
+			label, HORIZONTAL_ALIGNMENT_CENTER, -1, btn_fs, Color.WHITE)
+
+	# Footer hints
+	var hint_y := start_y + total_h + 20
+	draw_string(font, Vector2(cx, hint_y),
+		"Keyboard: press 1-4 to select", HORIZONTAL_ALIGNMENT_CENTER, -1, int(12 * _font_scale),
+		Color(1.0, 1.0, 1.0, 0.35))
+	draw_string(font, Vector2(cx, hint_y + 18),
+		"Mobile: tap a target above", HORIZONTAL_ALIGNMENT_CENTER, -1, int(12 * _font_scale),
+		Color(1.0, 1.0, 1.0, 0.35))
+
+
+func _draw_sprint_complete(font: Font, font_s: int, font_m: int, font_l: int,
+		board_center_x: float, board_center_y: float, board_width: float) -> void:
+	# Semi-transparent overlay over the board
+	var cs := _cell_size
+	var bx := _board_x
+	var by := _board_y
+	var board_height := Constants.VISIBLE_ROWS * cs
+	var overlay_rect := Rect2(bx, by, board_width, board_height)
+	draw_rect(overlay_rect, Color(0.0, 0.0, 0.0, 0.7), true)
+	draw_rect(Rect2(bx - 2, by - 2, board_width + 4, board_height + 4), Color(0.2, 1.0, 0.3), false, 3.0)
+
+	# "SPRINT COMPLETE!"
+	var title := "SPRINT COMPLETE!"
+	var title_size := font.get_string_size(title, HORIZONTAL_ALIGNMENT_CENTER, -1, font_l)
+	draw_string(font, Vector2(board_center_x, board_center_y - title_size.y - 8),
+		title, HORIZONTAL_ALIGNMENT_CENTER, -1, font_l, Color(0.3, 1.0, 0.4))
+
+	# Time
+	var time_str := "Time:  %s" % _format_time(sprint_time)
+	draw_string(font, Vector2(board_center_x, board_center_y + 4),
+		time_str, HORIZONTAL_ALIGNMENT_CENTER, -1, font_l, Color.WHITE)
+
+	# Best / New record
+	var best_y := board_center_y + font_l + 12
+	if _sprint_new_record:
+		draw_string(font, Vector2(board_center_x, best_y),
+			"NEW RECORD!", HORIZONTAL_ALIGNMENT_CENTER, -1, font_m, Color(1.0, 1.0, 0.3))
+	else:
+		var best_t: float = sprint_records.get(sprint_target, sprint_time)
+		var best_str := "Best:  %s" % _format_time(best_t)
+		draw_string(font, Vector2(board_center_x, best_y),
+			best_str, HORIZONTAL_ALIGNMENT_CENTER, -1, font_m, Color(1.0, 1.0, 1.0, 0.7))
+
+	# Continue hint
+	var hint_y := board_center_y + font_l + 12 + font_m + 16
+	draw_string(font, Vector2(board_center_x, hint_y),
+		"Tap or press any key to continue",
+		HORIZONTAL_ALIGNMENT_CENTER, -1, font_s, Color(1.0, 1.0, 1.0, 0.5))
 
 
 func _draw_cell(col: int, visible_row: int, color: Color, cell_size: int, board_x: int, board_y: int) -> void:

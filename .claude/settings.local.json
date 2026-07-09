@@ -7,7 +7,13 @@
       "Bash(git add *)",
       "Bash(git config *)",
       "Bash(git commit *)",
-      "Bash(python3 *)"
+      "Bash(python3 *)",
+      "Bash(git checkout *)",
+      "Bash(gh auth *)",
+      "Bash(apt update *)",
+      "Bash(apt install *)",
+      "Read(//root/.claude/**)",
+      "Read(//root/.claude/projects/**)"
     ]
   }
 }

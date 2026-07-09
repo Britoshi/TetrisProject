@@ -128,6 +128,8 @@ const KICKS_I: Dictionary = {
 func get_cells(piece_type: Constants.PieceType, rotation: int) -> Array[Vector2i]:
 	"""Return the 4 cell offsets for a piece at the given rotation state."""
 	var result: Array[Vector2i] = []
+	if not CELLS.has(piece_type):
+		return result  # EMPTY or unknown type — return empty
 	result.assign(CELLS[piece_type][rotation])
 	return result
 
