@@ -117,10 +117,9 @@ void fragment() {
 			warp_offset += touch_dir * r2 * 0.025;
 		}
 
-		// Ongoing micro-pulse while held (visible around finger)
-		float settled = clamp((touch_depth - 0.9) * 10.0, 0.0, 1.0);
+		// Ongoing micro-pulse while held (visible immediately, no delay)
 		float pulse = (sin(TIME * 7.0 + touch_dist * 15.0) * 0.018
-		             + cos(TIME * 11.0 - touch_dist * 10.0) * 0.012) * settled
+		             + cos(TIME * 11.0 - touch_dist * 10.0) * 0.012) * touch_depth
 		             * exp(-touch_dist * touch_dist * 12.0);
 		warp_offset += touch_dir * pulse;
 

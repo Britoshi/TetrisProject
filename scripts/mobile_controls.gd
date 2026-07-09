@@ -730,16 +730,15 @@ func _process(_delta: float) -> void:
 			val = clampf(val, -0.15, 1.15)
 			_wobble_value[i] = val
 			_wobble_velocity[i] = vel
-			_btn_shaders[i].set_shader_parameter("touch_uv", _wobble_touch_uv[i])
-			_btn_shaders[i].set_shader_parameter("touch_depth", val)
-			_btn_shaders[i].set_shader_parameter("touch_time", _wobble_event_time[i])
 		elif abs(val) < 0.002:
-			# Snap to zero when settled
+			# Snap to zero when fully released
 			_wobble_value[i] = 0.0
 			_wobble_velocity[i] = 0.0
 			_wobble_touch_uv[i] = Vector2(-1.0, -1.0)
-			_btn_shaders[i].set_shader_parameter("touch_uv", Vector2(-1.0, -1.0))
-			_btn_shaders[i].set_shader_parameter("touch_depth", 0.0)
+		# Always push current state to shader (drag updates need this even when settled)
+		_btn_shaders[i].set_shader_parameter("touch_uv", _wobble_touch_uv[i])
+		_btn_shaders[i].set_shader_parameter("touch_depth", _wobble_value[i])
+		_btn_shaders[i].set_shader_parameter("touch_time", _wobble_event_time[i])
 
 
 # ═══════════════════════════════════════════════════════════
