@@ -31,10 +31,12 @@ uniform float bevel_px : hint_range(1.0, 300.0) = 70.0;      // rolled-edge widt
 uniform float thickness_px : hint_range(0.0, 400.0) = 90.0;  // slab thickness (refraction throw)
 uniform float ior : hint_range(1.0, 2.0) = 1.45;
 uniform float dispersion : hint_range(0.0, 0.2) = 0.04;      // per-channel IOR spread
-uniform float frost_lod : hint_range(0.0, 6.0) = 2.2;        // interior frost (mip level)
+uniform float frost_lod : hint_range(0.0, 6.0) = 1.8;        // interior frost (mip level)
 uniform float dome : hint_range(0.0, 0.3) = 0.05;            // gentle whole-slab lens curvature
-uniform float ripple_strength : hint_range(0.0, 0.3) = 0.045; // animated liquid shimmer
-uniform float ripple_speed : hint_range(0.0, 4.0) = 1.0;
+uniform float wave_strength : hint_range(0.0, 0.8) = 0.3;    // water surface tilt amplitude
+uniform float wave_speed : hint_range(0.0, 4.0) = 1.0;
+uniform float wave_scale : hint_range(0.2, 5.0) = 1.0;       // spatial frequency multiplier
+uniform float glint_intensity : hint_range(0.0, 2.0) = 0.5;  // sun sparkle off the waves
 uniform float saturation : hint_range(0.5, 2.0) = 1.35;      // vibrancy
 uniform float brightness : hint_range(0.5, 1.5) = 1.06;
 uniform float spec_intensity : hint_range(0.0, 3.0) = 1.0;
@@ -108,14 +110,22 @@ void fragment() {
 	float bev = clamp(1.0 + sdf / bevel_px, 0.0, 1.0);
 	vec2 lat = grad * bev;
 
-	// Gentle dome over the whole slab (weak magnifying lens in the interior)
-	vec2 dome_dir = px / half_size;
-	lat += dome_dir * dome * (1.0 - bev);
+	// ── Water surface: sum of travelling directional waves ──
+	// Four octaves: slow swell (~300px), waves (~150px), chop (~75px),
+	// fine ripple (~40px). Each tilts the surface normal along its
+	// travel direction; the refraction below does the rest.
+	float t = TIME * wave_speed;
+	vec2 wp = px * wave_scale;
+	vec2 water = vec2(0.0);
+	water += vec2(0.83, 0.55) * cos(dot(wp, vec2(0.83, 0.55)) * 0.021 - t * 1.4) * 0.42;
+	water += vec2(-0.60, 0.80) * cos(dot(wp, vec2(-0.60, 0.80)) * 0.041 + t * 2.0) * 0.28;
+	water += vec2(0.31, -0.95) * cos(dot(wp, vec2(0.31, -0.95)) * 0.083 - t * 2.9) * 0.18;
+	water += vec2(-0.95, -0.31) * cos(dot(wp, vec2(-0.95, -0.31)) * 0.150 + t * 3.7) * 0.12;
+	water *= wave_strength;
 
-	// Animated liquid shimmer: slow travelling ripple perturbs the surface
-	lat += ripple_strength * (1.0 - bev) * vec2(
-		sin(TIME * ripple_speed * 1.1 + px.y * 0.045),
-		cos(TIME * ripple_speed * 0.9 + px.x * 0.045));
+	// Gentle dome + water, fading out where the rim bevel takes over
+	vec2 dome_dir = px / half_size;
+	lat += (dome_dir * dome + water) * (1.0 - bev);
 
 	// Cap lateral tilt and build the unit normal
 	float lat_len = length(lat);
@@ -151,6 +161,9 @@ void fragment() {
 	float spec = pow(max(dot(n, L1), 0.0), 24.0)
 	           + 0.55 * pow(max(dot(n, L2), 0.0), 24.0);
 
+	// Sun glint: broad sparkle where wave crests tilt toward the key light
+	float glint = pow(max(dot(n, L1), 0.0), 10.0) * glint_intensity;
+
 	// Fresnel-ish bright band hugging the whole rim
 	float fresnel = pow(nxy, 3.0) * 0.16;
 
@@ -158,7 +171,7 @@ void fragment() {
 	float hairline = (1.0 - smoothstep(0.0, rim_width_px, -sdf)) * 0.25;
 
 	color += rim_color.rgb * rim_color.a *
-	         (spec * spec_intensity + fresnel + hairline);
+	         (spec * spec_intensity + glint + fresnel + hairline);
 
 	// ── Faint top sheen ──
 	float sheen = smoothstep(sheen_falloff, 0.0, UV.y) * sheen_intensity;
