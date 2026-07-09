@@ -30,6 +30,9 @@ var new_record: bool = false
 # ── Timeline ──
 var boards: Array[String] = []
 var frames: Array = []
+# Splash ripple events (piece locks): each [t, amp, c0x,c0y, ... c3x,c3y]
+# in GRID cells, so playback rebuilds pixel centers at its own cell size.
+var splashes: Array = []
 
 var _last_board: String = ""
 var _last_key: String = ""
@@ -38,8 +41,19 @@ var _last_key: String = ""
 func start() -> void:
 	boards.clear()
 	frames.clear()
+	splashes.clear()
 	_last_board = ""
 	_last_key = ""
+
+
+func add_splash(t: float, amp: float, cells: Array) -> void:
+	if cells.size() < 4:
+		return
+	var ev: Array = [snappedf(t, 0.001), amp]
+	for k in range(4):
+		ev.append(int(cells[k].x))
+		ev.append(int(cells[k].y))
+	splashes.append(ev)
 
 
 # Frame layout: [t, px, py, rot, ptype, hold, board_ver, lines, score]
@@ -91,6 +105,7 @@ func to_dict() -> Dictionary:
 		"mode": mode, "result": result, "score": score, "lines": lines,
 		"level": level, "duration": duration, "date": date_unix,
 		"new_record": new_record, "boards": boards, "frames": frames,
+		"splashes": splashes,
 	}
 
 
@@ -109,6 +124,7 @@ static func from_dict(d: Dictionary) -> Replay:
 		b.append(str(s))
 	r.boards = b
 	r.frames = d.get("frames", [])
+	r.splashes = d.get("splashes", [])
 	return r
 
 

@@ -745,6 +745,18 @@ func set_menu_mode(on: bool) -> void:
 
 # ── SETTINGS (separate scene: scenes/mobile_settings.tscn) ──
 
+# Public wrappers so main.gd can open/close settings (e.g. from Esc).
+func open_settings() -> void:
+	if _mode == Mode.NORMAL:
+		_open_settings()
+
+func close_settings() -> void:
+	_close_settings()
+
+func is_settings_open() -> bool:
+	return _settings_open()
+
+
 func _settings_open() -> bool:
 	return _settings_ui != null and _settings_ui.visible
 

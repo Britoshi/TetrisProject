@@ -264,6 +264,13 @@ func _create_input_event(action: String, keycode: int) -> void:
 	InputMap.action_add_event(action, ev)
 
 func _input(event: InputEvent) -> void:
+	# Esc is global "back / settings" — close whatever modal is open, back
+	# out of a replay, else open the settings panel.
+	if event is InputEventKey and event.pressed and not event.echo \
+			and event.keycode == KEY_ESCAPE:
+		_handle_escape()
+		return
+
 	match state:
 		State.SPRINT_MENU:
 			# Taps are handled by the menu scene itself (SprintMenu/MenuRoot)
@@ -281,7 +288,24 @@ func _input(event: InputEvent) -> void:
 					KEY_SPACE: replay_toggle_pause()
 					KEY_R: replay_restart()
 					KEY_S: replay_cycle_speed()
-					KEY_ESCAPE: exit_replay()
+
+
+func _handle_escape() -> void:
+	# 1) settings open → close it
+	if _mobile_controls and _mobile_controls.is_settings_open():
+		_mobile_controls.close_settings()
+		return
+	# 2) history screen open → back to menu
+	if _history_screen and _history_screen.visible:
+		_on_history_closed()
+		return
+	# 3) watching a replay → exit it
+	if state == State.REPLAY:
+		exit_replay()
+		return
+	# 4) otherwise open the settings panel
+	if _mobile_controls:
+		_mobile_controls.open_settings()
 
 func _update_layout() -> void:
 	var vp_size := get_viewport_rect().size
@@ -1091,12 +1115,16 @@ func start_replay(replay: Replay, return_to_history: bool = true) -> void:
 func _process_replay(delta: float) -> void:
 	if _replay_playing == null:
 		return
+	var prev: float = _replay_clock
 	if not _replay_paused:
 		_replay_clock += delta * _replay_speed
 	var dur: float = _replay_playing.duration
 	if _replay_clock >= dur:
 		_replay_clock = dur
 		_replay_paused = true  # freeze on the final frame
+	# Re-fire the piece-lock splash ripples as the clock passes them
+	if _replay_clock > prev:
+		_fire_replay_splashes(prev, _replay_clock)
 	_apply_replay_frame(_replay_clock)
 	if _replay_hud and _replay_hud.has_method("update_progress"):
 		_replay_hud.update_progress(_replay_clock, dur, _replay_paused, _replay_speed)
@@ -1122,6 +1150,22 @@ func _apply_replay_frame(t: float) -> void:
 	_update_hold_preview()
 
 
+func _fire_replay_splashes(t0: float, t1: float) -> void:
+	"""Spawn any recorded lock-splashes whose timestamp is in (t0, t1].
+	Cells are stored in grid coords; rebuild pixel centers at current size."""
+	var board_size := Vector2(Constants.COLS, Constants.VISIBLE_ROWS) * float(_cell_size)
+	for ev in _replay_playing.splashes:
+		var et: float = float(ev[0])
+		if et > t0 and et <= t1:
+			var centers := PackedVector2Array()
+			for k in range(4):
+				var cx: float = float(ev[2 + k * 2])
+				var cy: float = float(ev[3 + k * 2])
+				centers.append(Vector2(cx + 0.5, cy - 2.0 + 0.5) * float(_cell_size)
+					- board_size * 0.5)
+			_spawn_splash(centers, float(ev[1]))
+
+
 func _apply_board_snapshot(types: PackedInt32Array, masks: PackedInt32Array) -> void:
 	"""Restore board grid (for ghost calc) + texture (exact fused look)."""
 	if _board_image == null or board == null:
@@ -1145,6 +1189,7 @@ func replay_restart() -> void:
 	_replay_clock = 0.0
 	_replay_last_ver = -1
 	_replay_paused = false
+	_splashes.clear()  # no lingering ripples from before the restart
 
 
 func replay_cycle_speed() -> void:
@@ -1156,6 +1201,7 @@ func replay_cycle_speed() -> void:
 func replay_scrub(fraction: float) -> void:
 	_replay_clock = clampf(fraction, 0.0, 1.0) * _replay_playing.duration
 	_replay_last_ver = -1
+	_splashes.clear()  # don't backfill a burst of ripples on seek
 
 
 func exit_replay() -> void:
@@ -1271,6 +1317,8 @@ func _lock_piece(splash_amp: float = 1.0) -> void:
 		centers.append(c - board_size * 0.5)
 	if centers.size() == 4:
 		_spawn_splash(centers, splash_amp)
+		if _recording and _replay != null:
+			_replay.add_splash(sprint_time, splash_amp, cells)
 
 	# Score T-spin before locking
 	var tspin: bool = false

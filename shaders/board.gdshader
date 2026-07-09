@@ -144,33 +144,52 @@ vec2 cell_data(vec2 cc) {
 		vec2((cc.x + 0.5) / 10.0, (cc.y + vanish_offset + 0.5) / 22.0)).rg;
 }
 
-// Axis-aligned box for one cell of a piece: padded on free sides, reaching
-// r PAST the cell line on connected sides (deep overlap keeps the union's
-// interior seams strongly negative — no rim strokes or lens kinks on them).
-// Corners are rounded ONLY where both adjacent sides are free — connected
-// sides stay square so neighboring boxes union into straight seams: no
-// pinches, no bump arcs poking into empty diagonal cells (overshoot into
-// empty cells is never rendered, since empty cells draw no glass).
-float piece_cell_box(vec2 p, vec2 cc, int mask, float r) {
+// True rounded SDF of the fused mass, evaluated from one cell using its
+// 8-neighbourhood (marching-squares style). Each pixel is rendered by its
+// own cell, and this returns the exact signed distance to the mass outline
+// in that pixel's quadrant — so CONVEX corners round out, CONCAVE corners
+// fillet IN, fused seams vanish, and there are no min-union notches at
+// bends (the artifact the box-union approach couldn't avoid). Walls sit at
+// the cell edge; the whole mass is inset by one uniform pad in the fragment.
+float mass_sdf(vec2 px, vec2 cc, int mask, float r) {
 	vec2 cd = rect_size / cell_count;
-	vec2 pad = cell_padding * cd;
+	vec2 hc = cd * 0.5;
 	vec2 center = ((cc + 0.5) / cell_count - 0.5) * rect_size;
-	float xl = ((mask & 1) != 0) ? cd.x * 0.5 + r : cd.x * 0.5 - pad.x;
-	float xr = ((mask & 2) != 0) ? cd.x * 0.5 + r : cd.x * 0.5 - pad.x;
-	float yu = ((mask & 4) != 0) ? cd.y * 0.5 + r : cd.y * 0.5 - pad.y;
-	float yd = ((mask & 8) != 0) ? cd.y * 0.5 + r : cd.y * 0.5 - pad.y;
-	vec2 bc = center + vec2((xr - xl) * 0.5, (yd - yu) * 0.5);
-	vec2 bh = vec2((xl + xr) * 0.5, (yu + yd) * 0.5);
-	vec2 rel = p - bc;
-	// Squircle rounding on this pixel's quadrant-corner iff both sides free
-	int bx = rel.x > 0.0 ? 2 : 1;
-	int by = rel.y > 0.0 ? 8 : 4;
-	float cr = ((mask & bx) == 0 && (mask & by) == 0) ? r : 0.0;
-	vec2 q = abs(rel) - bh + cr;
-	float d = min(max(q.x, q.y), 0.0);
-	vec2 qc = max(q, vec2(0.0));
-	float corner_dist = pow(pow(qc.x, 2.5) + pow(qc.y, 2.5), 1.0 / 2.5);
-	return d + corner_dist - cr;
+	vec2 p = px - center;
+	float qx = p.x >= 0.0 ? 1.0 : -1.0;
+	float qy = p.y >= 0.0 ? 1.0 : -1.0;
+	int bitX = qx > 0.0 ? 2 : 1;   // right : left
+	int bitY = qy > 0.0 ? 8 : 4;   // down : up
+	bool fx = (mask & bitX) != 0;  // this cell fused on the x-side?
+	bool fy = (mask & bitY) != 0;  // fused on the y-side?
+	vec2 lp = abs(p);              // corner of the cell is at hc
+
+	if (!fx && !fy) {
+		// Convex corner — squircle-rounded, radius r
+		vec2 q = lp - hc + r;
+		float dd = min(max(q.x, q.y), 0.0);
+		vec2 qc = max(q, vec2(0.0));
+		float cdst = pow(pow(qc.x, 2.5) + pow(qc.y, 2.5), 1.0 / 2.5);
+		return dd + cdst - r;
+	}
+	if (!fx) {           // wall on the x-side only → straight vertical edge
+		return lp.x - hc.x;
+	}
+	if (!fy) {           // wall on the y-side only → straight horizontal edge
+		return lp.y - hc.y;
+	}
+	// Both sides fused. If the diagonal fills the corner it's interior;
+	// otherwise it's a reentrant (concave) corner → fillet radius r.
+	int nmaskX = int(cell_data(cc + vec2(qx, 0.0)).g + 0.5);
+	bool diag_filled = (nmaskX & bitY) != 0;   // x-neighbour reaches the diagonal
+	if (diag_filled) {
+		return -min(hc.x, hc.y);   // deep interior
+	}
+	// Concave: mass = complement of the rounded notch beyond (hc, hc)
+	vec2 q = lp - hc + r;
+	float dd = min(max(q.x, q.y), 0.0);
+	float notch = dd + length(max(q, vec2(0.0))) - r;
+	return -notch;
 }
 
 // Occupied-weighted bilinear blend of the four nearest cells' piece colors.
@@ -198,48 +217,6 @@ vec3 blended_block_color(vec2 gp) {
 		}
 	}
 	return wsum > 1e-4 ? acc / wsum : vec3(0.0);
-}
-
-// Rounded union of this cell's box with every same-piece cell nearby
-// (orthogonal neighbors plus the diagonals reachable through them) —
-// the whole tetromino renders as ONE continuous glass container.
-float merged_piece_sdf(vec2 p, vec2 cc0, int m0, float r) {
-	float d = piece_cell_box(p, cc0, m0, r);
-	for (int s = 0; s < 2; s++) {
-		float sx = s == 0 ? -1.0 : 1.0;
-		int bit = s == 0 ? 1 : 2;
-		if ((m0 & bit) != 0) {
-			vec2 cn = cc0 + vec2(sx, 0.0);
-			int mn = int(cell_data(cn).g + 0.5);
-			d = min(d, piece_cell_box(p, cn, mn, r));
-			if ((mn & 4) != 0) {
-				vec2 cd2 = cn + vec2(0.0, -1.0);
-				d = min(d, piece_cell_box(p, cd2, int(cell_data(cd2).g + 0.5), r));
-			}
-			if ((mn & 8) != 0) {
-				vec2 cd2 = cn + vec2(0.0, 1.0);
-				d = min(d, piece_cell_box(p, cd2, int(cell_data(cd2).g + 0.5), r));
-			}
-		}
-	}
-	for (int s = 0; s < 2; s++) {
-		float sy = s == 0 ? -1.0 : 1.0;
-		int bit = s == 0 ? 4 : 8;
-		if ((m0 & bit) != 0) {
-			vec2 cn = cc0 + vec2(0.0, sy);
-			int mn = int(cell_data(cn).g + 0.5);
-			d = min(d, piece_cell_box(p, cn, mn, r));
-			if ((mn & 1) != 0) {
-				vec2 cd2 = cn + vec2(-1.0, 0.0);
-				d = min(d, piece_cell_box(p, cd2, int(cell_data(cd2).g + 0.5), r));
-			}
-			if ((mn & 2) != 0) {
-				vec2 cd2 = cn + vec2(1.0, 0.0);
-				d = min(d, piece_cell_box(p, cd2, int(cell_data(cd2).g + 0.5), r));
-			}
-		}
-	}
-	return d;
 }
 
 // Accumulate signed distance (+gradient) to one splash/wall cell —
@@ -441,9 +418,14 @@ void fragment() {
 		int cmask = int(cdata.g + 0.5);
 		float rr = 0.28 * min(cell_dim.x, cell_dim.y);
 		float tile_sdf = 1e6;
+		float raw_sdf = 1e6;
 		float tile_alpha = 0.0;
+		// One uniform pad inset of the WHOLE merged mass (not per-cell), so
+		// concave junctions stay clean instead of stepping.
+		float pad_px = cell_padding * min(cell_dim.x, cell_dim.y);
 		if (cc.a > 0.01) {
-			tile_sdf = merged_piece_sdf(px, cell_coord, cmask, rr);
+			raw_sdf = mass_sdf(px, cell_coord, cmask, rr);
+			tile_sdf = raw_sdf + pad_px;
 			tile_alpha = 1.0 - smoothstep(-0.75, 0.75, tile_sdf);
 		}
 
@@ -455,8 +437,8 @@ void fragment() {
 		if (tile_alpha > 0.001) {
 			// Lens direction from the merged surface (numerical gradient)
 			// so refraction flows continuously across the whole piece
-			float dgx = merged_piece_sdf(px + vec2(1.0, 0.0), cell_coord, cmask, rr) - tile_sdf;
-			float dgy = merged_piece_sdf(px + vec2(0.0, 1.0), cell_coord, cmask, rr) - tile_sdf;
+			float dgx = mass_sdf(px + vec2(1.0, 0.0), cell_coord, cmask, rr) - raw_sdf;
+			float dgy = mass_sdf(px + vec2(0.0, 1.0), cell_coord, cmask, rr) - raw_sdf;
 			vec2 dirc = normalize(vec2(dgx, dgy) + vec2(1e-5, 0.0));
 
 			// Piece color, optionally melted into the neighbors' colors
