@@ -131,8 +131,24 @@ func _ready() -> void:
 	print("  controller created")
 	_load_sprint_records()
 	_setup_background()
+	_setup_glow_environment()
 	_create_render_nodes()
 	print("=== _ready() done — state: SPRINT_MENU ===")
+
+func _setup_glow_environment() -> void:
+	"""Bloom post-process: blocks emit HDR color (> 1.0) in their shaders
+	and this glow picks it up. Needs rendering/viewport/hdr_2d=true."""
+	var env := Environment.new()
+	env.glow_enabled = true
+	env.glow_intensity = 0.9
+	env.glow_strength = 1.04
+	env.glow_bloom = 0.15
+	env.glow_blend_mode = Environment.GLOW_BLEND_MODE_ADDITIVE
+	env.glow_hdr_threshold = 1.1
+	var we := WorldEnvironment.new()
+	we.name = "GlowEnvironment"
+	we.environment = env
+	add_child(we)
 
 func _setup_input_actions() -> void:
 	# Only set up once
@@ -310,7 +326,7 @@ func _create_render_nodes() -> void:
 	_position_all_nodes()
 	_update_board_texture()
 
-func _make_piece_cell(color: Color, alpha: float, glow: float, size: float = -1.0) -> ColorRect:
+func _make_piece_cell(color: Color, alpha: float, glow: float, size: float = -1.0, emission: float = 0.0) -> ColorRect:
 	"""Create a single ColorRect with piece.gdshader material."""
 	var cr := ColorRect.new()
 	cr.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -322,6 +338,7 @@ func _make_piece_cell(color: Color, alpha: float, glow: float, size: float = -1.
 	mat.set_shader_parameter("alpha", alpha)
 	mat.set_shader_parameter("glow_intensity", glow)
 	mat.set_shader_parameter("cell_radius", 0.18)
+	mat.set_shader_parameter("emission", emission)
 	cr.material = mat
 	return cr
 
@@ -357,6 +374,7 @@ func _create_board_node() -> void:
 	_board_material.set_shader_parameter("wave_strength", 0.3)
 	_board_material.set_shader_parameter("wave_speed", 1.0)
 	_board_material.set_shader_parameter("wave_scale", 1.0)
+	_board_material.set_shader_parameter("block_emission", 1.5)
 
 	# Colors from Constants.COLORS
 	var c := Constants.COLORS
@@ -391,7 +409,7 @@ func _create_piece_cells() -> void:
 	_game_layer.add_child(_piece_container)
 
 	for i in range(4):
-		var cr := _make_piece_cell(Color.WHITE, 1.0, 0.4)
+		var cr := _make_piece_cell(Color.WHITE, 1.0, 0.4, -1.0, 1.5)
 		_piece_container.add_child(cr)
 		_piece_cells.append(cr)
 		_piece_materials.append(cr.material as ShaderMaterial)
@@ -452,7 +470,7 @@ func _create_hold_preview() -> void:
 	_hold_container.name = "HoldPreview"
 	_game_layer.add_child(_hold_container)
 	for i in range(4):
-		var cr := _make_piece_cell(Color.GRAY, 1.0, 0.2, 0)
+		var cr := _make_piece_cell(Color.GRAY, 1.0, 0.2, 0, 0.7)
 		_hold_container.add_child(cr)
 		_hold_cells.append(cr)
 		_hold_materials.append(cr.material as ShaderMaterial)
@@ -469,7 +487,7 @@ func _create_next_preview() -> void:
 		var cells: Array[ColorRect] = []
 		var mats: Array[ShaderMaterial] = []
 		for j in range(4):
-			var cr := _make_piece_cell(Color.GRAY, 1.0, 0.2, 0)
+			var cr := _make_piece_cell(Color.GRAY, 1.0, 0.2, 0, 0.7)
 			sub.add_child(cr)
 			cells.append(cr)
 			mats.append(cr.material as ShaderMaterial)

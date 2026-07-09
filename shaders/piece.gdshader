@@ -7,6 +7,8 @@ uniform vec4 fill_color : source_color = vec4(0.5, 0.5, 0.5, 1.0);
 uniform float cell_radius : hint_range(0.0, 0.5) = 0.18;
 uniform float glow_intensity : hint_range(0.0, 1.0) = 0.4;
 uniform float alpha : hint_range(0.0, 1.0) = 1.0;
+// HDR emission (> 1.0 output) so the bloom post-process catches the cell
+uniform float emission : hint_range(0.0, 4.0) = 0.0;
 
 // Squircle SDF — Apple-style continuous corner
 float sdf(vec2 p, vec2 b, float r) {
@@ -34,6 +36,9 @@ void fragment() {
 	// Inner glow from edge
 	float glow = exp(-abs(d) * 6.0) * glow_intensity * 0.35;
 	color += glow;
+
+	// HDR emission for bloom
+	color *= 1.0 + emission;
 
 	COLOR = vec4(color, shape * fill_color.a * alpha);
 }

@@ -79,6 +79,9 @@ uniform vec4 color_7 : source_color = vec4(1.0, 0.55, 0.0, 1.0);
 uniform vec4 flash_rows = vec4(-1.0);
 uniform float flash_intensity : hint_range(0.0, 1.0) = 0.0;
 
+// ── Block emission (HDR > 1.0 so the glow post-process blooms it) ──
+uniform float block_emission : hint_range(0.0, 4.0) = 1.5;
+
 // ── Squircle SDF (identical to the button's rounded_box_sdf) ──
 float rounded_box_sdf(vec2 p, vec2 b, float r) {
 	vec2 q = abs(p) - b + r;
@@ -298,14 +301,14 @@ void fragment() {
 
 			vec4 cc = get_color(piece_type);
 			if (cc.a > 0.01) {
-				// Flat piece color on top of glass
-				color = cc.rgb;
+				// Piece color, pushed into HDR so bloom picks it up
+				color = cc.rgb * (1.0 + block_emission);
 
 				// Flash
 				if (flash_intensity > 0.01) {
 					if (cell_coord.y == flash_rows.x || cell_coord.y == flash_rows.y ||
 					    cell_coord.y == flash_rows.z || cell_coord.y == flash_rows.w) {
-						color = mix(color, vec3(1.0), flash_intensity * 0.8);
+						color = mix(color, vec3(2.5), flash_intensity * 0.8);
 					}
 				}
 				// Subtle highlight

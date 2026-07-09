@@ -26,3 +26,4 @@ PieceData="*res://autoload/piece_data.gd"
 [rendering]
 
 rendering_device/driver.windows="d3d12"
+viewport/hdr_2d=true
