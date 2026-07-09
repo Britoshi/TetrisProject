@@ -37,6 +37,12 @@ uniform float wave_strength : hint_range(0.0, 0.8) = 0.3;    // water surface ti
 uniform float wave_speed : hint_range(0.0, 4.0) = 1.0;
 uniform float wave_scale : hint_range(0.2, 5.0) = 1.0;       // spatial frequency multiplier
 uniform float glint_intensity : hint_range(0.0, 2.0) = 0.5;  // sun sparkle off the waves
+
+// Splash ripples (piece locks). xy = center in board px (origin at rect
+// center), z = age in seconds (< 0 inactive), w = amplitude.
+uniform vec4 splashes[6];
+uniform float splash_strength : hint_range(0.0, 2.0) = 0.7;
+uniform float splash_speed_px : hint_range(50.0, 600.0) = 240.0; // ring expansion px/s
 uniform float saturation : hint_range(0.5, 2.0) = 1.35;      // vibrancy
 uniform float brightness : hint_range(0.5, 1.5) = 1.06;
 uniform float spec_intensity : hint_range(0.0, 3.0) = 1.0;
@@ -123,9 +129,35 @@ void fragment() {
 	water += vec2(-0.95, -0.31) * cos(dot(wp, vec2(-0.95, -0.31)) * 0.150 + t * 3.7) * 0.12;
 	water *= wave_strength;
 
-	// Gentle dome + water, fading out where the rim bevel takes over
+	// ── Splash ripples: expanding damped rings where pieces land ──
+	// Main ring + trailing wavelet + initial plunge dimple, like a drop
+	// hitting the surface.
+	vec2 splash_lat = vec2(0.0);
+	float splash_glow = 0.0;
+	for (int i = 0; i < 6; i++) {
+		float age = splashes[i].z;
+		float amp = splashes[i].w;
+		if (age < 0.0 || amp <= 0.001) {
+			continue;
+		}
+		vec2 d = px - splashes[i].xy;
+		float dist = length(d);
+		vec2 sdir = dist > 0.5 ? d / dist : vec2(0.0);
+		float R = age * splash_speed_px;
+		float damp = exp(-age * 2.0) * amp;
+		float q1 = (dist - R) / 26.0;
+		float q2 = (dist - R * 0.62) / 20.0;
+		float ring = exp(-q1 * q1);
+		float ring2 = 0.5 * exp(-q2 * q2);
+		float plunge = exp(-dist * dist / 900.0) * clamp(1.0 - age * 6.0, 0.0, 1.0);
+		splash_lat += sdir * (ring + ring2) * damp;
+		splash_lat -= sdir * plunge * amp * 0.8;
+		splash_glow += ring * damp;
+	}
+
+	// Gentle dome + water + splashes, fading out where the rim bevel takes over
 	vec2 dome_dir = px / half_size;
-	lat += (dome_dir * dome + water) * (1.0 - bev);
+	lat += (dome_dir * dome + water + splash_lat * splash_strength) * (1.0 - bev);
 
 	// Cap lateral tilt and build the unit normal
 	float lat_len = length(lat);
@@ -171,7 +203,8 @@ void fragment() {
 	float hairline = (1.0 - smoothstep(0.0, rim_width_px, -sdf)) * 0.25;
 
 	color += rim_color.rgb * rim_color.a *
-	         (spec * spec_intensity + glint + fresnel + hairline);
+	         (spec * spec_intensity + glint + fresnel + hairline +
+	          splash_glow * 0.25);
 
 	// ── Faint top sheen ──
 	float sheen = smoothstep(sheen_falloff, 0.0, UV.y) * sheen_intensity;

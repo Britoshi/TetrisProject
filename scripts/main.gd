@@ -98,6 +98,13 @@ var _next_materials: Array = []
 var _bg_fallback_rect: ColorRect = null
 var _bg_bake_size: Vector2 = Vector2.ZERO
 
+# Water splash ripples (piece lock). Vector4: xy = board-local px
+# (origin at board center), z = age seconds, w = amplitude.
+const SPLASH_MAX: int = 6
+const SPLASH_LIFE: float = 1.6
+var _splashes: Array = []
+var _splashes_clean: bool = false
+
 # Piece shader resource (shared by all piece cells)
 var _piece_shader: Shader = null
 var _game_layer: CanvasLayer = null
@@ -363,6 +370,9 @@ func _create_board_node() -> void:
 	_board_material.set_shader_parameter("color_6", c[Constants.PieceType.J])
 	_board_material.set_shader_parameter("color_7", c[Constants.PieceType.L])
 	_board_material.set_shader_parameter("flash_rows", Vector4(-1.0, -1.0, -1.0, -1.0))
+	_board_material.set_shader_parameter("splash_strength", 0.7)
+	_board_material.set_shader_parameter("splash_speed_px", 240.0)
+	_push_splash_uniform()
 
 	# Data texture (10x22, FORMAT_RF = 32-bit float per pixel)
 	_board_image = Image.create(BOARD_TEX_W, BOARD_TEX_H, false, Image.FORMAT_RF)
@@ -637,6 +647,43 @@ func _update_next_preview() -> void:
 			_next_materials[i][j].set_shader_parameter("alpha", 1.0)
 			_next_cells[i][j].visible = true
 
+func _spawn_splash(pos: Vector2, amp: float = 1.0) -> void:
+	"""Start a water-drop splash ripple at a board-local position
+	(pixels, origin at board center)."""
+	_splashes.append(Vector4(pos.x, pos.y, 0.0, amp))
+	while _splashes.size() > SPLASH_MAX:
+		_splashes.pop_front()
+
+func _update_splashes(delta: float) -> void:
+	"""Age active splashes and push them to the board shader. Called
+	every frame; cheap no-op when no splashes are live."""
+	if _board_material == null:
+		return
+	if _splashes.is_empty():
+		if not _splashes_clean:
+			_push_splash_uniform()
+			_splashes_clean = true
+		return
+	_splashes_clean = false
+	for i in range(_splashes.size() - 1, -1, -1):
+		var s: Vector4 = _splashes[i]
+		s.z += delta
+		if s.z > SPLASH_LIFE:
+			_splashes.remove_at(i)
+		else:
+			_splashes[i] = s
+	_push_splash_uniform()
+
+func _push_splash_uniform() -> void:
+	var arr := PackedVector4Array()
+	arr.resize(SPLASH_MAX)
+	for i in range(SPLASH_MAX):
+		if i < _splashes.size():
+			arr[i] = _splashes[i]
+		else:
+			arr[i] = Vector4(0.0, 0.0, -1.0, 0.0)
+	_board_material.set_shader_parameter("splashes", arr)
+
 func _set_flash_rows(rows: Array, intensity: float) -> void:
 	"""Set line clear flash uniforms on the board shader."""
 	if _board_material == null:
@@ -772,6 +819,7 @@ func _process(delta: float) -> void:
 			_set_game_nodes_visible(false)
 
 	# ── Shader-based rendering updates (every frame) ──
+	_update_splashes(delta)
 	if state != State.SPRINT_MENU and state != State.SPRINT_COMPLETE:
 		_update_piece_positions()
 		_update_ghost_positions()
@@ -926,16 +974,24 @@ func _try_gravity() -> bool:
 func _hard_drop() -> void:
 	var distance: int = controller.hard_drop()
 	score += distance * Constants.SCORE_HARD_DROP
-	_lock_piece()
+	_lock_piece(1.4)  # bigger splash — the piece hit the water hard
 
 func _reset_lock_if_on_ground() -> void:
 	if controller.is_on_ground() and controller.lock_resets < Constants.MAX_LOCK_RESETS:
 		controller.lock_timer = 0.0
 		controller.lock_resets += 1
 
-func _lock_piece() -> void:
+func _lock_piece(splash_amp: float = 1.0) -> void:
 	controller.is_locked = true
 	var cells = controller.get_absolute_cells()
+
+	# Water-drop splash where the piece landed
+	var centroid := Vector2.ZERO
+	for cell in cells:
+		centroid += Vector2(cell.x + 0.5, cell.y - 2.0 + 0.5)
+	centroid /= float(cells.size())
+	var board_size := Vector2(Constants.COLS, Constants.VISIBLE_ROWS) * float(_cell_size)
+	_spawn_splash(centroid * float(_cell_size) - board_size * 0.5, splash_amp)
 
 	# Score T-spin before locking
 	var tspin: bool = false
