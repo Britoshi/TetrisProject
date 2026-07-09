@@ -23,8 +23,10 @@ const SPRINT_SAVE_PATH: String = "user://sprint_records.cfg"
 var sprint_target: int = 0               # 0 = menu, then 20/40/100/200
 var sprint_time: float = 0.0             # elapsed seconds in current sprint
 var sprint_records: Dictionary = {}      # {20: 45.2, 40: 90.1, ...}
-var _menu_target_rects: Array[Rect2] = [] # hit-test rects for sprint menu
 var _sprint_new_record: bool = false      # true if this run set a record
+var _sprint_menu: Control = null          # MenuRoot of scenes/sprint_menu.tscn
+var _mobile_controls: Control = null      # ButtonPanel of scenes/mobile_controls.tscn
+var _game_settings: Node = null           # GameSettings autoload
 
 # ── Hold (stash) ──
 var _held_piece_type: int = Constants.PieceType.EMPTY
@@ -133,6 +135,14 @@ func _ready() -> void:
 	_setup_background()
 	_setup_glow_environment()
 	_create_render_nodes()
+	_sprint_menu = get_node("SprintMenu/MenuRoot")
+	_sprint_menu.setup(SPRINT_TARGETS, sprint_records)
+	_sprint_menu.target_selected.connect(_start_sprint)
+	_mobile_controls = get_node_or_null("MobileControls/ButtonPanel")
+	_game_settings = get_node_or_null("/root/GameSettings")
+	if _game_settings:
+		_game_settings.changed.connect(_update_board_texture)
+	_show_menu()
 	print("=== _ready() done — state: SPRINT_MENU ===")
 
 func _setup_glow_environment() -> void:
@@ -172,16 +182,14 @@ func _setup_input_actions() -> void:
 	_create_input_event("tetris_hard_drop", KEY_SPACE)
 
 	_add_action_if_missing("tetris_rotate_cw")
-	_create_input_event("tetris_rotate_cw", KEY_X)
+	_create_input_event("tetris_rotate_cw", KEY_K)
 	_create_input_event("tetris_rotate_cw", KEY_UP)
 
 	_add_action_if_missing("tetris_rotate_ccw")
-	_create_input_event("tetris_rotate_ccw", KEY_Z)
-	_create_input_event("tetris_rotate_ccw", KEY_CTRL)
+	_create_input_event("tetris_rotate_ccw", KEY_J)
 
 	_add_action_if_missing("tetris_hold")
 	_create_input_event("tetris_hold", KEY_C)
-	_create_input_event("tetris_hold", KEY_SHIFT)
 
 	_add_action_if_missing("tetris_restart")
 	_create_input_event("tetris_restart", KEY_R)
@@ -198,14 +206,10 @@ func _create_input_event(action: String, keycode: int) -> void:
 func _input(event: InputEvent) -> void:
 	match state:
 		State.SPRINT_MENU:
+			# Taps are handled by the menu scene itself (SprintMenu/MenuRoot)
 			if event is InputEventKey and event.pressed and not event.echo:
 				for i in range(SPRINT_TARGETS.size()):
 					if event.keycode == KEY_1 + i:
-						_start_sprint(SPRINT_TARGETS[i])
-						return
-			if event is InputEventScreenTouch and event.pressed:
-				for i in range(_menu_target_rects.size()):
-					if _menu_target_rects[i].has_point(event.position):
 						_start_sprint(SPRINT_TARGETS[i])
 						return
 		State.SPRINT_COMPLETE:
@@ -235,6 +239,10 @@ func _setup_background() -> void:
 	_bg_rect = TextureRect.new()
 	_bg_rect.name = "BackgroundImage"
 	_bg_rect.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_COVERED
+	# Without IGNORE_SIZE the rect's minimum size is the texture's native
+	# size (4K) — it can never shrink to the window, so the screen shows a
+	# 1:1 top-left corner crop that never matches the baked board bg_tex.
+	_bg_rect.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 	_bg_rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_bg_layer.add_child(_bg_rect)
 
@@ -301,7 +309,7 @@ func _bake_board_bg() -> void:
 	# Bake SHARP at ~1/3 screen res WITH mipmaps. The shader picks blur
 	# per-pixel via textureLod: lod 0 (sharp) on the refracting rim so the
 	# bent content is recognizable, high lod (frosted) in the interior.
-	var base_h := clampi(int(vp_size.y / 3.0), 64, 1024)
+	var base_h := clampi(int(vp_size.y / 1.5), 64, 1440)
 	var base_w := maxi(2, int(round(base_h * vp_size.x / vp_size.y)))
 	img.resize(base_w, base_h, Image.INTERPOLATE_LANCZOS)
 	# HDR 2D renders in linear space. Imported textures get sRGB->linear
@@ -365,10 +373,15 @@ func _create_board_node() -> void:
 	# ── Pre-blurred background for the glass (baked on CPU, renderer-proof) ──
 	_bake_board_bg()
 
-	# Glass uniforms — same values/pipeline as the liquid glass buttons
-	_board_material.set_shader_parameter("blur_amount", 2.5)
-	_board_material.set_shader_parameter("warp_intensity", 0.25)
-	_board_material.set_shader_parameter("warp_strength", 10.0)
+	# Glass uniforms — same pipeline as the liquid glass buttons, but the
+	# lens must scale with the surface: warp_offset is in SCREEN UV, so the
+	# board (6x a button) needs ~6x the displacement and a fatter falloff
+	# band or the refraction is proportionally invisible. Verified by A/B
+	# pixel diff at these values (~11% of frame pixels move).
+	_board_material.set_shader_parameter("blur_amount", 3.5)
+	_board_material.set_shader_parameter("warp_intensity", 1.2)
+	_board_material.set_shader_parameter("warp_strength", 4.0)
+	_board_material.set_shader_parameter("wall_warp_intensity", 0.3)
 	_board_material.set_shader_parameter("chromatic_strength", 3.0)
 	_board_material.set_shader_parameter("border_width", 1.5)
 	_board_material.set_shader_parameter("border_color", Color(1.0, 1.0, 1.0, 0.45))
@@ -396,8 +409,9 @@ func _create_board_node() -> void:
 	_board_material.set_shader_parameter("hole_tilt", 0.35)
 	_push_splash_uniform()
 
-	# Data texture (10x22, FORMAT_RF = 32-bit float per pixel)
-	_board_image = Image.create(BOARD_TEX_W, BOARD_TEX_H, false, Image.FORMAT_RF)
+	# Data texture (10x22, FORMAT_RGF: R = piece type, G = same-piece
+	# connectivity mask for merged glass tiles)
+	_board_image = Image.create(BOARD_TEX_W, BOARD_TEX_H, false, Image.FORMAT_RGF)
 	_board_image.fill(Color(0, 0, 0, 1))  # all empty
 	_board_texture = ImageTexture.create_from_image(_board_image)
 	_board_material.set_shader_parameter("board_tex", _board_texture)
@@ -523,10 +537,12 @@ func _update_board_texture() -> void:
 	"""Copy board.grid → 10×22 ImageTexture. Call after lock/clear/reset."""
 	if _board_image == null or board == null:
 		return
+	var style: int = _game_settings.block_style if _game_settings else 1
 	for r in range(Constants.ROWS):
 		for c in range(Constants.COLS):
 			var val: float = float(board.get_cell(c, r))
-			_board_image.set_pixel(c, r, Color(val, 0, 0, 1))
+			var mask: float = float(board.get_conn_mask(c, r, style))
+			_board_image.set_pixel(c, r, Color(val, mask, 0, 1))
 	_board_texture.update(_board_image)
 
 func _set_game_nodes_visible(v: bool) -> void:
@@ -604,7 +620,8 @@ func _update_ghost_positions() -> void:
 		p.append(c - board_size * 0.5)
 	var rounding: float = cs * 0.12
 	var pcolor: Color = Constants.COLORS.get(controller.piece_type, Color.GRAY) as Color
-	_board_material.set_shader_parameter("ghost_color", Color(pcolor.r, pcolor.g, pcolor.b, 0.28))
+	_board_material.set_shader_parameter("ghost_color", Color(pcolor.r, pcolor.g, pcolor.b, 0.38))
+	_board_material.set_shader_parameter("ghost_rim_px", cs * 0.1)
 	_board_material.set_shader_parameter("ghost_active", 1.0)
 	_board_material.set_shader_parameter("ghost_half", cs * 0.5 - rounding)
 	_board_material.set_shader_parameter("ghost_round", rounding)
@@ -751,8 +768,11 @@ func _position_all_nodes() -> void:
 		_board_rect.position = Vector2(bx, by)
 		_board_rect.size = Vector2(board_w, board_h)
 
-	# HUD labels (right side)
-	var right_x: float = bx + board_w + margin
+	# HUD labels (right side); clamp so they never run off narrow screens —
+	# on portrait they overlay the glass board's right edge instead
+	var vw: float = get_viewport_rect().size.x
+	var hud_w: float = maxf(cs * 2.5, 120.0 * _font_scale)
+	var right_x: float = minf(bx + board_w + margin, vw - hud_w - margin)
 	var line_h: float = font_m + 8
 	var score_y: float = by + cs + font_m
 
@@ -865,8 +885,8 @@ func _process(delta: float) -> void:
 		_update_ghost_positions()
 		_update_hud()
 
-	# Overlays (sprint menu, game over, sprint complete) still use _draw()
-	if state == State.SPRINT_MENU or state == State.GAME_OVER or state == State.SPRINT_COMPLETE:
+	# Overlays (game over, sprint complete) still use _draw()
+	if state == State.GAME_OVER or state == State.SPRINT_COMPLETE:
 		queue_redraw()
 
 func _process_playing(delta: float) -> void:
@@ -1082,10 +1102,18 @@ func _do_clear_lines() -> void:
 
 func _restart() -> void:
 	_restart_game_only()
-	# Return to sprint menu
+	_show_menu()
+
+func _show_menu() -> void:
+	"""Return to (or start at) the sprint menu."""
 	sprint_target = 0
 	sprint_time = 0.0
 	state = State.SPRINT_MENU
+	_sprint_menu.update_records(sprint_records)
+	_sprint_menu.get_parent().visible = true
+	if _mobile_controls:
+		_mobile_controls.set_menu_mode(true)
+	queue_redraw()  # clear any game-over / complete overlay drawing
 
 func _restart_game_only() -> void:
 	"""Reset board/score/level but keep sprint target. Used by _start_sprint."""
@@ -1111,7 +1139,11 @@ func _start_sprint(target: int) -> void:
 	sprint_target = target
 	sprint_time = 0.0
 	_sprint_new_record = false
+	_sprint_menu.get_parent().visible = false
+	if _mobile_controls:
+		_mobile_controls.set_menu_mode(false)
 	_restart_game_only()
+	_position_all_nodes()  # sprint HUD adds the Time row — shift Next below it
 
 func _finish_sprint() -> void:
 	"""Called when lines_cleared >= sprint_target. Checks/saves record."""
@@ -1184,9 +1216,8 @@ func _draw() -> void:
 	var font_m: int = int(16 * _font_scale)
 	var font_l: int = int(24 * _font_scale)
 
-	# Sprint menu — full-screen, skip all game rendering
+	# Sprint menu is its own scene (SprintMenu/MenuRoot) — nothing to draw
 	if state == State.SPRINT_MENU:
-		_draw_sprint_menu(font_s, font_m, font_l)
 		return
 
 	var board_width: int = Constants.COLS * cs
@@ -1198,75 +1229,28 @@ func _draw() -> void:
 	# Game over overlay
 	if state == State.GAME_OVER:
 		draw_rect(Rect2(bx - 2, by - 2, board_width + 4, board_height + 4), Color.RED, false, 3.0)
-		draw_string(font, Vector2(board_center_x, board_center_y - font_l - 4),
-			"GAME OVER", HORIZONTAL_ALIGNMENT_CENTER, -1, font_l, Color.RED)
-		draw_string(font, Vector2(board_center_x, board_center_y + 8),
-			"Tap ⬇ or R for Menu", HORIZONTAL_ALIGNMENT_CENTER, -1, font_m, Color(1.0, 1.0, 1.0, 0.7))
+		_draw_text_centered(font, board_center_x, board_center_y - font_l - 4,
+			"GAME OVER", font_l, Color.RED)
+		_draw_text_centered(font, board_center_x, board_center_y + 8,
+			"Tap ⬇ or R for Menu", font_m, Color(1.0, 1.0, 1.0, 0.7))
 		if sprint_target > 0:
-			draw_string(font, Vector2(board_center_x, board_center_y + 8 + font_m + 6),
+			_draw_text_centered(font, board_center_x, board_center_y + 8 + font_m + 6,
 				"Cleared %d/%d lines in %s" % [lines_cleared, sprint_target, _format_time(sprint_time)],
-				HORIZONTAL_ALIGNMENT_CENTER, -1, font_s, Color(1.0, 1.0, 1.0, 0.5))
+				font_s, Color(1.0, 1.0, 1.0, 0.5))
 		return
 
 	# Sprint complete overlay
 	if state == State.SPRINT_COMPLETE:
 		_draw_sprint_complete(font, font_s, font_m, font_l, board_center_x, board_center_y, board_width)
 		return
-func _draw_sprint_menu(font_s: int, font_m: int, font_l: int) -> void:
-	var font := ThemeDB.fallback_font
-	var vp_rect := get_viewport_rect()
-	var cx := vp_rect.size.x / 2.0
 
-	# Title
-	var title := "SPRINT MODE"
-	var title_y := vp_rect.size.y * 0.12
-	draw_string(font, Vector2(cx, title_y),
-		title, HORIZONTAL_ALIGNMENT_CENTER, -1, font_l + 8, Color.WHITE)
-
-	var sub := "Select Target"
-	draw_string(font, Vector2(cx, title_y + font_l + 14),
-		sub, HORIZONTAL_ALIGNMENT_CENTER, -1, font_m, Color(1.0, 1.0, 1.0, 0.6))
-
-	# Target buttons
-	var btn_w := minf(vp_rect.size.x * 0.55, 280.0)
-	var btn_h := 52.0
-	var btn_gap := 12.0
-	var total_h := float(SPRINT_TARGETS.size()) * btn_h + float(SPRINT_TARGETS.size() - 1) * btn_gap
-	var start_y := title_y + font_l + 14 + font_m + 24
-
-	_menu_target_rects.clear()
-
-	for i in range(SPRINT_TARGETS.size()):
-		var target := SPRINT_TARGETS[i]
-		var bx := cx - btn_w / 2.0
-		var by := start_y + float(i) * (btn_h + btn_gap)
-		var rect := Rect2(bx, by, btn_w, btn_h)
-		_menu_target_rects.append(rect)
-
-		# Button fill
-		draw_rect(rect, Color(0.2, 0.25, 0.38, 1.0), true)
-		draw_rect(rect, Color(1.0, 1.0, 1.0, 0.2), false, 2.0)
-
-		# Label: "40 Lines"
-		var label := "%d Lines" % target
-		# Show best time if available
-		if sprint_records.has(target):
-			var best_t: float = sprint_records[target]
-			label += "    (best: %s)" % _format_time(best_t)
-
-		var btn_fs := int(16 * _font_scale)
-		var label_s := font.get_string_size(label, HORIZONTAL_ALIGNMENT_CENTER, -1, btn_fs)
-		draw_string(font, Vector2(cx, by + btn_h / 2.0 - label_s.y / 2.0 + 2),
-			label, HORIZONTAL_ALIGNMENT_CENTER, -1, btn_fs, Color.WHITE)
-
-	# Footer hints
-	var hint_y := start_y + total_h + 20
-	draw_string(font, Vector2(cx, hint_y),
-		"Keyboard: press 1-4 to select", HORIZONTAL_ALIGNMENT_CENTER, -1, int(12 * _font_scale),
-		Color(1.0, 1.0, 1.0, 0.35))
-	draw_string(font, Vector2(cx, hint_y + 18),
-		"Mobile: tap a target above", HORIZONTAL_ALIGNMENT_CENTER, -1, int(12 * _font_scale),
-		Color(1.0, 1.0, 1.0, 0.35))
+func _draw_text_centered(font: Font, cx: float, baseline_y: float, text: String,
+		fs: int, color: Color) -> void:
+	# draw_string ignores HORIZONTAL_ALIGNMENT_CENTER when width is -1,
+	# so center manually from the measured string width.
+	var w := font.get_string_size(text, HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x
+	draw_string(font, Vector2(cx - w / 2.0, baseline_y), text,
+		HORIZONTAL_ALIGNMENT_LEFT, -1, fs, color)
 
 func _draw_sprint_complete(font: Font, font_s: int, font_m: int, font_l: int,
 		board_center_x: float, board_center_y: float, board_width: float) -> void:
@@ -1281,28 +1265,25 @@ func _draw_sprint_complete(font: Font, font_s: int, font_m: int, font_l: int,
 
 	# "SPRINT COMPLETE!"
 	var title := "SPRINT COMPLETE!"
-	var title_size := font.get_string_size(title, HORIZONTAL_ALIGNMENT_CENTER, -1, font_l)
-	draw_string(font, Vector2(board_center_x, board_center_y - title_size.y - 8),
-		title, HORIZONTAL_ALIGNMENT_CENTER, -1, font_l, Color(0.3, 1.0, 0.4))
+	var title_size := font.get_string_size(title, HORIZONTAL_ALIGNMENT_LEFT, -1, font_l)
+	_draw_text_centered(font, board_center_x, board_center_y - title_size.y - 8,
+		title, font_l, Color(0.3, 1.0, 0.4))
 
 	# Time
-	var time_str := "Time:  %s" % _format_time(sprint_time)
-	draw_string(font, Vector2(board_center_x, board_center_y + 4),
-		time_str, HORIZONTAL_ALIGNMENT_CENTER, -1, font_l, Color.WHITE)
+	_draw_text_centered(font, board_center_x, board_center_y + 4,
+		"Time:  %s" % _format_time(sprint_time), font_l, Color.WHITE)
 
 	# Best / New record
 	var best_y := board_center_y + font_l + 12
 	if _sprint_new_record:
-		draw_string(font, Vector2(board_center_x, best_y),
-			"NEW RECORD!", HORIZONTAL_ALIGNMENT_CENTER, -1, font_m, Color(1.0, 1.0, 0.3))
+		_draw_text_centered(font, board_center_x, best_y,
+			"NEW RECORD!", font_m, Color(1.0, 1.0, 0.3))
 	else:
 		var best_t: float = sprint_records.get(sprint_target, sprint_time)
-		var best_str := "Best:  %s" % _format_time(best_t)
-		draw_string(font, Vector2(board_center_x, best_y),
-			best_str, HORIZONTAL_ALIGNMENT_CENTER, -1, font_m, Color(1.0, 1.0, 1.0, 0.7))
+		_draw_text_centered(font, board_center_x, best_y,
+			"Best:  %s" % _format_time(best_t), font_m, Color(1.0, 1.0, 1.0, 0.7))
 
 	# Continue hint
 	var hint_y := board_center_y + font_l + 12 + font_m + 16
-	draw_string(font, Vector2(board_center_x, hint_y),
-		"Tap or press any key to continue",
-		HORIZONTAL_ALIGNMENT_CENTER, -1, font_s, Color(1.0, 1.0, 1.0, 0.5))
+	_draw_text_centered(font, board_center_x, hint_y,
+		"Tap or press any key to continue", font_s, Color(1.0, 1.0, 1.0, 0.5))

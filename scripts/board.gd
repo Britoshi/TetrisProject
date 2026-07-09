@@ -6,6 +6,10 @@ extends RefCounted
 # ── Grid state ──
 # grid[row][col] = piece type (0 = empty, 1-7 = PieceType)
 var grid: Array[Array] = []
+# id_grid[row][col] = locked piece instance id (0 = empty). Lets rendering
+# know which neighboring cells came from the same tetromino placement.
+var id_grid: Array[Array] = []
+var _next_piece_id: int = 1
 var cols: int
 var rows: int
 
@@ -22,11 +26,16 @@ func _init(p_cols: int = Constants.COLS, p_rows: int = Constants.ROWS) -> void:
 
 func _reset_grid() -> void:
 	grid.clear()
+	id_grid.clear()
 	for r in range(rows):
 		var row: Array[int] = []
 		row.resize(cols)
 		row.fill(0)
 		grid.append(row)
+		var id_row: Array[int] = []
+		id_row.resize(cols)
+		id_row.fill(0)
+		id_grid.append(id_row)
 
 
 # ── Query ──
@@ -57,6 +66,33 @@ func lock_piece(cells: Array[Vector2i], piece_type: int) -> void:
 	for cell in cells:
 		if cell.y >= 0 and cell.y < rows and cell.x >= 0 and cell.x < cols:
 			grid[cell.y][cell.x] = piece_type
+			id_grid[cell.y][cell.x] = _next_piece_id
+	_next_piece_id += 1
+
+
+func get_conn_mask(col: int, row: int, style: int = 1) -> int:
+	"""Bitmask of 4-neighbors this cell visually fuses with:
+	1 = left, 2 = right, 4 = up, 8 = down. 0 for empty cells.
+	style: 0 = separate tiles, 1 = fuse same piece, 2 = fuse everything."""
+	var id: int = id_grid[row][col]
+	if id == 0 or style == 0:
+		return 0
+	var mask: int = 0
+	if col > 0 and _fuses(id_grid[row][col - 1], id, style):
+		mask |= 1
+	if col < cols - 1 and _fuses(id_grid[row][col + 1], id, style):
+		mask |= 2
+	if row > 0 and _fuses(id_grid[row - 1][col], id, style):
+		mask |= 4
+	if row < rows - 1 and _fuses(id_grid[row + 1][col], id, style):
+		mask |= 8
+	return mask
+
+
+func _fuses(neighbor_id: int, id: int, style: int) -> bool:
+	if style >= 2:
+		return neighbor_id != 0
+	return neighbor_id == id
 
 
 func clear_lines() -> Array[int]:
@@ -81,6 +117,7 @@ func clear_lines() -> Array[int]:
 	full_rows.reverse()
 	for r in full_rows:
 		grid.remove_at(r)
+		id_grid.remove_at(r)
 
 	# Add empty rows at the top
 	for _i in range(full_rows.size()):
@@ -88,6 +125,10 @@ func clear_lines() -> Array[int]:
 		new_row.resize(cols)
 		new_row.fill(0)
 		grid.insert(0, new_row)
+		var new_id_row: Array[int] = []
+		new_id_row.resize(cols)
+		new_id_row.fill(0)
+		id_grid.insert(0, new_id_row)
 
 	return full_rows
 

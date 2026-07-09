@@ -5,6 +5,8 @@
 # screen-space blur, chromatic aberration, rim light, and specular sheen.
 # Theme presets defined in scripts/theme.gd (ThemeData class).
 # Touch dispatch via parent _gui_input; child nodes have MOUSE_FILTER_IGNORE.
+# Settings UI is a separate scene (scenes/mobile_settings.tscn) instantiated
+# on gear tap; it communicates back via signals.
 
 extends Control
 
@@ -17,7 +19,6 @@ const BOTTOM_MARGIN: float = 20.0
 const PANEL_PADDING: float = 14.0
 const BTN_ASPECT_DEFAULT: float = 0.65
 const BTN_CORNER_RADIUS_FRAC: float = 0.28
-const SETTINGS_CORNER_RADIUS: int = 10
 const PANEL_CORNER_RADIUS: int = 8
 
 const GEAR_SIZE: float = 44.0
@@ -27,9 +28,10 @@ const BTN_SIZE_STEP: float = 0.1
 
 const HAPTIC_DURATION_MS: float = 12.0
 const SHADER_PATH: String = "res://shaders/liquid_glass.gdshader"
+const SETTINGS_SCENE_PATH: String = "res://scenes/mobile_settings.tscn"
 const DEFAULT_THEME: String = "ios_liquid_glass"
 
-enum Mode { NORMAL, SETTINGS, EDIT }
+enum Mode { NORMAL, EDIT }
 
 const DEFAULT_BUTTONS: Array = [
 	["◀",  "tetris_move_left",   Color(0.22, 0.27, 0.50, 1.0)],
@@ -58,15 +60,11 @@ var _panel_rect: Rect2
 # ── Gear ──
 var _gear_rect: Rect2
 
-# ── Settings panel hit regions ──
-var _settings_panel_bg: Rect2
-var _settings_edit_rect: Rect2
-var _settings_reset_rect: Rect2
-var _settings_close_rect: Rect2
-var _settings_size_minus_rect: Rect2
-var _settings_size_plus_rect: Rect2
-var _settings_aspect_minus_rect: Rect2
-var _settings_aspect_plus_rect: Rect2
+# ── Hide-buttons setting (persisted; gear stays visible to re-enable) ──
+var _buttons_hidden: bool = false
+
+# ── Menu mode: game screens hide the buttons too (set by main.gd) ──
+var _menu_mode: bool = false
 
 # ── Edit mode ──
 var _done_rect: Rect2
@@ -112,10 +110,8 @@ var _btn_subs: Array[Label] = []           # sub label for edit mode (child of p
 var _gear_node: Panel = null
 var _gear_label: Label = null
 
-# Settings overlay
-var _settings_root: Control = null
-var _settings_dim: ColorRect = null
-var _settings_panel: Panel = null
+# Settings UI (separate scene, lazily instantiated on the CanvasLayer)
+var _settings_ui = null
 
 # Edit toolbar
 var _edit_root: Control = null
@@ -209,9 +205,9 @@ func _ready() -> void:
 	_create_panel_bg()
 	_create_game_buttons()
 	_create_gear()
-	_create_settings_overlay()
 	_create_edit_toolbar()
 
+	_load_visibility()
 	if not _load_config():
 		_layout_default()
 
@@ -308,24 +304,6 @@ func _create_gear() -> void:
 	_gear_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	_gear_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(_gear_label)
-
-
-func _create_settings_overlay() -> void:
-	_settings_root = Control.new()
-	_settings_root.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_settings_root.visible = false
-	add_child(_settings_root)
-
-	_settings_dim = ColorRect.new()
-	_settings_dim.color = Color(0.0, 0.0, 0.0, 0.55)
-	_settings_dim.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_settings_root.add_child(_settings_dim)
-
-	_settings_panel = Panel.new()
-	_settings_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_settings_panel.add_theme_stylebox_override("panel",
-		_make_solid_style(Color(0.15, 0.15, 0.18, 1.0), SETTINGS_CORNER_RADIUS, Color(1,1,1,0.1)))
-	_settings_root.add_child(_settings_panel)
 
 
 func _create_edit_toolbar() -> void:
@@ -504,14 +482,14 @@ func apply_theme(theme_name: String) -> void:
 
 func _apply_mode() -> void:
 	var in_normal := _mode == Mode.NORMAL
-	var in_settings := _mode == Mode.SETTINGS
 	var in_edit := _mode == Mode.EDIT
 
-	var alpha_mod: float = 0.35 if in_settings else 1.0
+	# Edit mode always shows the buttons (even when hidden) so they stay editable
+	var show_buttons := in_edit or (in_normal and not _buttons_hidden and not _menu_mode)
 	for i in range(_btn_panels.size()):
-		_btn_panels[i].visible = in_normal or in_settings or in_edit
-		_btn_lbls[i].visible = in_normal or in_settings or in_edit
-		_btn_lbls[i].modulate.a = alpha_mod
+		_btn_panels[i].visible = show_buttons
+		_btn_lbls[i].visible = show_buttons
+		_btn_lbls[i].modulate.a = 1.0
 		_btn_subs[i].visible = in_edit
 
 		# Shader uniforms per mode (base theme + mode overrides)
@@ -525,27 +503,19 @@ func _apply_mode() -> void:
 			mat.set_shader_parameter("border_width", theme_border_w * 2.0)
 			mat.set_shader_parameter("pressed", 0.0)
 			mat.set_shader_parameter("glow_color", Color(1, 1, 1, 0.3))
-		elif in_normal:
+		else:
 			mat.set_shader_parameter("border_color", theme_border)
 			mat.set_shader_parameter("border_width", theme_border_w)
 			mat.set_shader_parameter("glow_color", theme_glow)
 			mat.set_shader_parameter("pressed", 1.0 if _btn_pressed[i] else 0.0)
-		else:  # settings — dimmed buttons
-			mat.set_shader_parameter("border_color", Color(theme_border.r, theme_border.g, theme_border.b, theme_border.a * 0.4))
-			mat.set_shader_parameter("border_width", theme_border_w * 0.7)
-			mat.set_shader_parameter("pressed", 0.0)
-			mat.set_shader_parameter("glow_color", Color(1, 1, 1, 0.2))
 
-		# Tint alpha per mode
 		var c := _btn_colors[i]
 		var tint_alpha: float = _active_theme.get("tint_alpha", 0.55)
-		if in_settings:
-			mat.set_shader_parameter("tint", Color(c.r, c.g, c.b, tint_alpha * 0.5))
-		else:
-			mat.set_shader_parameter("tint", Color(c.r, c.g, c.b, tint_alpha))
+		mat.set_shader_parameter("tint", Color(c.r, c.g, c.b, tint_alpha))
 
 	# Gear
-	_gear_node.visible = in_normal or in_settings
+	_gear_node.visible = in_normal
+	_gear_label.visible = in_normal
 	_gear_rect = Rect2(10, 10, GEAR_SIZE, GEAR_SIZE)
 	_gear_node.position = _gear_rect.position
 	_gear_node.size = _gear_rect.size
@@ -554,91 +524,10 @@ func _apply_mode() -> void:
 	_gear_label.add_theme_font_size_override("font_size", int(GEAR_SIZE * 0.55))
 	_gear_label.add_theme_color_override("font_color", Color.WHITE)
 
-	# Settings overlay
-	_settings_root.visible = in_settings
-	if in_settings:
-		_layout_settings()
-
 	# Edit toolbar
 	_edit_root.visible = in_edit
 	if in_edit:
 		_layout_edit_toolbar()
-
-
-func _layout_settings() -> void:
-	_settings_dim.position = Vector2.ZERO
-	_settings_dim.size = size
-
-	var pw: float = minf(size.x * 0.82, 360.0)
-	var ph: float = 340.0
-	var px: float = (size.x - pw) / 2.0
-	var py: float = (size.y - ph) / 2.0
-	_settings_panel_bg = Rect2(px, py, pw, ph)
-	_settings_panel.position = _settings_panel_bg.position
-	_settings_panel.size = _settings_panel_bg.size
-
-	# Clear and recreate settings children
-	for c in _settings_root.get_children():
-		if c != _settings_dim and c != _settings_panel:
-			c.queue_free()
-	for c in _settings_panel.get_children():
-		c.queue_free()
-
-	var fs := 18
-	var row_h := 44.0
-	var margin := 18.0
-
-	_make_label("Settings", Rect2(px, py + margin, pw, 24), fs + 2, Color.WHITE, _settings_panel)
-
-	var y := py + margin + 26.0
-	var btn_margin := 20.0
-	var btn_w := pw - btn_margin * 2
-	var btn_style := _make_solid_style(Color(0.25, 0.25, 0.32), SETTINGS_CORNER_RADIUS)
-
-	_settings_edit_rect = Rect2(px + btn_margin, y, btn_w, row_h)
-	_make_panel(_settings_edit_rect, btn_style, _settings_root)
-	_make_label("Edit Layout", _settings_edit_rect, fs, Color.WHITE, _settings_root)
-	y += row_h + 10.0
-
-	var reset_style := _make_solid_style(Color(0.38, 0.18, 0.18), SETTINGS_CORNER_RADIUS)
-	_settings_reset_rect = Rect2(px + btn_margin, y, btn_w, row_h)
-	_make_panel(_settings_reset_rect, reset_style, _settings_root)
-	_make_label("Reset to Defaults", _settings_reset_rect, fs, Color.WHITE, _settings_root)
-	y += row_h + 10.0
-
-	var size_label := "Btn Size: %.0f%%" % (_btn_size_mult * 100.0)
-	var size_lbl_w := btn_w * 0.45
-	_make_panel(Rect2(px + btn_margin, y, size_lbl_w, row_h), btn_style, _settings_root)
-	_make_label(size_label, Rect2(px + btn_margin, y, size_lbl_w, row_h), fs, Color.WHITE, _settings_root)
-
-	var size_btn_w := (btn_w - size_lbl_w - 10) / 2.0
-	_settings_size_minus_rect = Rect2(px + btn_margin + size_lbl_w + 10, y, size_btn_w, row_h)
-	_make_panel(_settings_size_minus_rect, btn_style, _settings_root)
-	_make_label("−", _settings_size_minus_rect, fs, Color.WHITE, _settings_root)
-
-	_settings_size_plus_rect = Rect2(_settings_size_minus_rect.end.x + 5, y, size_btn_w, row_h)
-	_make_panel(_settings_size_plus_rect, btn_style, _settings_root)
-	_make_label("+", _settings_size_plus_rect, fs, Color.WHITE, _settings_root)
-	y += row_h + 10.0
-
-	var aspect_label := "Btn Shape: %.0f%%" % (_btn_aspect * 100.0)
-	var aspect_lbl_w := btn_w * 0.45
-	_make_panel(Rect2(px + btn_margin, y, aspect_lbl_w, row_h), btn_style, _settings_root)
-	_make_label(aspect_label, Rect2(px + btn_margin, y, aspect_lbl_w, row_h), fs, Color.WHITE, _settings_root)
-
-	var aspect_btn_w := (btn_w - aspect_lbl_w - 10) / 2.0
-	_settings_aspect_minus_rect = Rect2(px + btn_margin + aspect_lbl_w + 10, y, aspect_btn_w, row_h)
-	_make_panel(_settings_aspect_minus_rect, btn_style, _settings_root)
-	_make_label("−", _settings_aspect_minus_rect, fs, Color.WHITE, _settings_root)
-
-	_settings_aspect_plus_rect = Rect2(_settings_aspect_minus_rect.end.x + 5, y, aspect_btn_w, row_h)
-	_make_panel(_settings_aspect_plus_rect, btn_style, _settings_root)
-	_make_label("+", _settings_aspect_plus_rect, fs, Color.WHITE, _settings_root)
-	y += row_h + 10.0
-
-	_settings_close_rect = Rect2(px + btn_margin, y, btn_w, row_h)
-	_make_panel(_settings_close_rect, btn_style, _settings_root)
-	_make_label("Close", _settings_close_rect, fs, Color.WHITE, _settings_root)
 
 
 func _layout_edit_toolbar() -> void:
@@ -686,7 +575,7 @@ func _layout_edit_toolbar() -> void:
 func _process(_delta: float) -> void:
 	_elapsed += _delta
 
-	if _mode != Mode.NORMAL:
+	if _mode != Mode.NORMAL or _settings_open() or _buttons_hidden or _menu_mode:
 		# Still decay wobble springs in settings/edit mode
 		for i in range(_btn_panels.size()):
 			_wobble_target[i] = 0.0  # release all wobbles
@@ -749,7 +638,6 @@ func _gui_input(event: InputEvent) -> void:
 	if event is InputEventScreenTouch:
 		match _mode:
 			Mode.NORMAL:   _touch_normal(event.position, event.pressed, event.index)
-			Mode.SETTINGS: _touch_settings(event.position, event.pressed)
 			Mode.EDIT:     _touch_edit(event.position, event.pressed, event.index)
 		accept_event()
 	elif event is InputEventScreenDrag:
@@ -767,8 +655,10 @@ func _touch_normal(pos: Vector2, pressed: bool, index: int) -> void:
 	if pressed:
 		if _gear_rect.has_point(pos):
 			_haptic_pulse()
-			_mode = Mode.SETTINGS
-			_apply_mode()
+			_open_settings()
+			return
+
+		if _buttons_hidden or _menu_mode:
 			return
 
 		for i in range(_btn_rects.size()):
@@ -847,43 +737,77 @@ func _drag_normal(pos: Vector2, index: int) -> void:
 
 	# Finger is in empty space — keep touch_map so re-entry to same button works
 
-# ── SETTINGS mode ──
+func set_menu_mode(on: bool) -> void:
+	"""Hide the game buttons on menu screens (gear stays). Called by main.gd."""
+	_menu_mode = on
+	_apply_mode()
 
-func _touch_settings(pos: Vector2, pressed: bool) -> void:
-	if not pressed:
-		return
 
-	if _settings_edit_rect.has_point(pos):
+# ── SETTINGS (separate scene: scenes/mobile_settings.tscn) ──
+
+func _settings_open() -> bool:
+	return _settings_ui != null and _settings_ui.visible
+
+
+func _open_settings() -> void:
+	if _settings_ui == null:
+		var packed := load(SETTINGS_SCENE_PATH) as PackedScene
+		if packed == null:
+			push_error("Failed to load settings scene: " + SETTINGS_SCENE_PATH)
+			return
+		_settings_ui = packed.instantiate()
+		_settings_ui.edit_layout_requested.connect(_on_settings_edit_layout)
+		_settings_ui.reset_requested.connect(_on_settings_reset)
+		_settings_ui.size_stepped.connect(_on_settings_size_stepped)
+		_settings_ui.aspect_stepped.connect(_on_settings_aspect_stepped)
+		_settings_ui.buttons_visible_toggled.connect(_on_settings_buttons_toggled)
+		_settings_ui.closed.connect(_close_settings)
+		# Sibling on the CanvasLayer so it draws (and takes input) above the buttons
+		get_parent().add_child(_settings_ui)
+	_settings_ui.setup(_btn_size_mult, _btn_aspect, not _buttons_hidden)
+	_settings_ui.visible = true
+
+
+func _close_settings() -> void:
+	if _settings_ui and _settings_ui.visible:
 		_haptic_pulse()
-		_mode = Mode.EDIT
-		_apply_mode()
-	elif _settings_reset_rect.has_point(pos):
-		_haptic_pulse()
-		_reset_to_defaults()
-		_apply_mode()
-	elif _settings_close_rect.has_point(pos):
-		_haptic_pulse()
-		_mode = Mode.NORMAL
-		_apply_mode()
-	elif _settings_size_minus_rect.has_point(pos):
-		_haptic_pulse()
-		_btn_size_mult = clampf(_btn_size_mult - BTN_SIZE_STEP, BTN_SIZE_MIN, BTN_SIZE_MAX)
-		_layout_default()
-	elif _settings_size_plus_rect.has_point(pos):
-		_haptic_pulse()
-		_btn_size_mult = clampf(_btn_size_mult + BTN_SIZE_STEP, BTN_SIZE_MIN, BTN_SIZE_MAX)
-		_layout_default()
-	elif _settings_aspect_minus_rect.has_point(pos):
-		_haptic_pulse()
-		_btn_aspect = clampf(_btn_aspect - 0.05, 0.3, 1.2)
-		_layout_default()
-	elif _settings_aspect_plus_rect.has_point(pos):
-		_haptic_pulse()
-		_btn_aspect = clampf(_btn_aspect + 0.05, 0.3, 1.2)
-		_layout_default()
-	elif not _settings_panel_bg.has_point(pos):
-		_mode = Mode.NORMAL
-		_apply_mode()
+		_settings_ui.visible = false
+
+
+func _on_settings_edit_layout() -> void:
+	_haptic_pulse()
+	_settings_ui.visible = false
+	_mode = Mode.EDIT
+	# Editing over the sprint menu: block the menu's pre-GUI input
+	add_to_group("menu_input_blockers")
+	_apply_mode()
+
+
+func _on_settings_reset() -> void:
+	_haptic_pulse()
+	_reset_to_defaults()
+	_settings_ui.setup(_btn_size_mult, _btn_aspect, not _buttons_hidden)
+
+
+func _on_settings_size_stepped(direction: float) -> void:
+	_haptic_pulse()
+	_btn_size_mult = clampf(_btn_size_mult + direction * BTN_SIZE_STEP, BTN_SIZE_MIN, BTN_SIZE_MAX)
+	_layout_default()
+	_settings_ui.update_values(_btn_size_mult, _btn_aspect)
+
+
+func _on_settings_aspect_stepped(direction: float) -> void:
+	_haptic_pulse()
+	_btn_aspect = clampf(_btn_aspect + direction * 0.05, 0.3, 1.2)
+	_layout_default()
+	_settings_ui.update_values(_btn_size_mult, _btn_aspect)
+
+
+func _on_settings_buttons_toggled(buttons_visible: bool) -> void:
+	_haptic_pulse()
+	_buttons_hidden = not buttons_visible
+	_save_visibility()
+	_apply_mode()
 
 
 # ── EDIT mode ──
@@ -895,6 +819,8 @@ func _touch_edit(pos: Vector2, pressed: bool, _index: int) -> void:
 			_save_config()
 			_mode = Mode.NORMAL
 			_dragging = -1
+			if is_in_group("menu_input_blockers"):
+				remove_from_group("menu_input_blockers")
 			_apply_mode()
 			return
 
@@ -981,6 +907,7 @@ const SAVE_PATH := "user://mobile_controls.cfg"
 
 func _save_config() -> void:
 	var cfg := ConfigFile.new()
+	cfg.set_value("settings", "buttons_visible", not _buttons_hidden)
 	cfg.set_value("layout", "button_count", _btn_rects.size())
 	cfg.set_value("layout", "panel_rect", var_to_str(_panel_rect))
 	cfg.set_value("layout", "btn_size_mult", _btn_size_mult)
@@ -993,6 +920,20 @@ func _save_config() -> void:
 		cfg.set_value(section, "rect", var_to_str(_btn_rects[i]))
 	cfg.save(SAVE_PATH)
 	print("Mobile controls saved to ", SAVE_PATH)
+
+
+func _load_visibility() -> void:
+	var cfg := ConfigFile.new()
+	if cfg.load(SAVE_PATH) == OK:
+		_buttons_hidden = not cfg.get_value("settings", "buttons_visible", true)
+
+
+func _save_visibility() -> void:
+	# Persist immediately on toggle; keep any saved layout sections intact.
+	var cfg := ConfigFile.new()
+	cfg.load(SAVE_PATH)
+	cfg.set_value("settings", "buttons_visible", not _buttons_hidden)
+	cfg.save(SAVE_PATH)
 
 
 func _load_config() -> bool:
@@ -1050,6 +991,7 @@ func _reset_to_defaults() -> void:
 		_btn_colors.append(def[2])
 	_btn_size_mult = 1.0
 	_btn_aspect = BTN_ASPECT_DEFAULT
+	_buttons_hidden = false
 	_config_loaded = false
 
 	# Reset shader fill colors and labels

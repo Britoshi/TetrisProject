@@ -26,10 +26,14 @@ uniform float vanish_offset = 2.0;
 uniform float cell_padding : hint_range(0.0, 0.2) = 0.04;
 
 // ── Glass body (button-identical) ──
+uniform float bg_dim : hint_range(0.0, 1.0) = 0.35;
 uniform float blur_amount : hint_range(0.0, 8.0) = 2.5;
 uniform vec4 glass_tint : source_color = vec4(0.06, 0.08, 0.14, 0.15);
-uniform float warp_intensity : hint_range(0.0, 1.0) = 0.25;
+uniform float warp_intensity : hint_range(0.0, 2.0) = 0.25;
 uniform float warp_strength : hint_range(0.0, 30.0) = 10.0;
+// Meniscus around locked blocks — MUST stay small: wall_field only sees a
+// 3x3 cell window, so this warp has to die out within one cell.
+uniform float wall_warp_intensity : hint_range(0.0, 2.0) = 0.3;
 
 // ── Edge / border (button-identical) ──
 uniform float border_width : hint_range(0.0, 8.0) = 1.5;
@@ -65,6 +69,11 @@ uniform float ghost_round = 4.0;
 uniform float hole_bevel_px : hint_range(1.0, 200.0) = 34.0;
 uniform float hole_tilt : hint_range(0.0, 1.0) = 0.35;
 uniform vec4 ghost_color : source_color = vec4(1.0, 1.0, 1.0, 0.28);
+// Pulsing emissive rim around the ghost hole (HDR: crosses the bloom
+// threshold like the blocks do, so the drop target visibly glows)
+uniform float ghost_rim_px : hint_range(0.5, 12.0) = 3.0;
+uniform float ghost_glow : hint_range(0.0, 4.0) = 1.6;
+uniform float ghost_pulse_speed : hint_range(0.0, 10.0) = 3.0;
 
 // ── Piece colors ──
 uniform vec4 color_1 : source_color = vec4(0.0, 0.88, 0.88, 1.0);
@@ -81,6 +90,13 @@ uniform float flash_intensity : hint_range(0.0, 1.0) = 0.0;
 
 // ── Block emission: blocks output HDR (> 1.25) so ONLY they bloom ──
 uniform float block_emission : hint_range(0.0, 4.0) = 1.2;
+
+// ── Locked blocks as individual liquid-glass tiles ──
+// Face = refracted bg + piece tint; rim = HDR piece color (bloom hugs edges)
+uniform float block_tint_alpha : hint_range(0.0, 1.0) = 0.65;
+uniform float block_warp_intensity : hint_range(0.0, 2.0) = 0.15;
+// 0 = each block keeps its flat color; 1 = colors melt into neighbors
+uniform float block_color_blend : hint_range(0.0, 1.0) = 1.0;
 
 // ── Squircle SDF (identical to the button's rounded_box_sdf) ──
 float rounded_box_sdf(vec2 p, vec2 b, float r) {
@@ -117,6 +133,122 @@ float hole_sdf(vec2 p) {
 	d = min(d, box_sdf(p - ghost_cells_b.xy, ghost_half));
 	d = min(d, box_sdf(p - ghost_cells_b.zw, ghost_half));
 	return d - ghost_round;
+}
+
+// (piece type, same-piece connectivity mask) for a visible-grid cell.
+// Mask bits: 1 = left, 2 = right, 4 = up, 8 = down.
+vec2 cell_data(vec2 cc) {
+	return texture(board_tex,
+		vec2((cc.x + 0.5) / 10.0, (cc.y + vanish_offset + 0.5) / 22.0)).rg;
+}
+
+float box_sdf2(vec2 rel, vec2 h) {
+	vec2 q = abs(rel) - h;
+	return length(max(q, vec2(0.0))) + min(max(q.x, q.y), 0.0);
+}
+
+// Axis-aligned box for one cell of a piece: padded on free sides, extended
+// past the cell boundary on connected sides, pre-shrunk by r (caller
+// inflates by r, which rounds convex corners and fillets concave ones).
+float piece_cell_box(vec2 p, vec2 cc, int mask, float r) {
+	vec2 cd = rect_size / cell_count;
+	vec2 pad = cell_padding * cd;
+	vec2 center = ((cc + 0.5) / cell_count - 0.5) * rect_size;
+	float xl = ((mask & 1) != 0) ? cd.x * 0.5 + r : cd.x * 0.5 - pad.x;
+	float xr = ((mask & 2) != 0) ? cd.x * 0.5 + r : cd.x * 0.5 - pad.x;
+	float yu = ((mask & 4) != 0) ? cd.y * 0.5 + r : cd.y * 0.5 - pad.y;
+	float yd = ((mask & 8) != 0) ? cd.y * 0.5 + r : cd.y * 0.5 - pad.y;
+	vec2 bc = center + vec2((xr - xl) * 0.5, (yd - yu) * 0.5);
+	vec2 bh = vec2((xl + xr) * 0.5, (yu + yd) * 0.5) - r;
+	return box_sdf2(p - bc, max(bh, vec2(0.5)));
+}
+
+// Occupied-weighted bilinear blend of the four nearest cells' piece colors.
+// Gives smooth color gradients across fused blocks; renormalizes near empty
+// neighbors so lone blocks keep their own color.
+vec3 blended_block_color(vec2 gp) {
+	vec2 base = floor(gp - 0.5);
+	vec2 f = fract(gp - 0.5);
+	vec3 acc = vec3(0.0);
+	float wsum = 0.0;
+	for (int i = 0; i < 2; i++) {
+		for (int j = 0; j < 2; j++) {
+			vec2 cc = base + vec2(float(i), float(j));
+			vec4 col = get_color(cell_data(cc).r);
+			if (col.a > 0.01) {
+				float wgt = (i == 0 ? 1.0 - f.x : f.x) * (j == 0 ? 1.0 - f.y : f.y);
+				acc += col.rgb * wgt;
+				wsum += wgt;
+			}
+		}
+	}
+	return wsum > 1e-4 ? acc / wsum : vec3(0.0);
+}
+
+// Rounded union of this cell's box with every same-piece cell nearby
+// (orthogonal neighbors plus the diagonals reachable through them) —
+// the whole tetromino renders as ONE continuous glass container.
+float merged_piece_sdf(vec2 p, vec2 cc0, int m0, float r) {
+	float d = piece_cell_box(p, cc0, m0, r);
+	for (int s = 0; s < 2; s++) {
+		float sx = s == 0 ? -1.0 : 1.0;
+		int bit = s == 0 ? 1 : 2;
+		if ((m0 & bit) != 0) {
+			vec2 cn = cc0 + vec2(sx, 0.0);
+			int mn = int(cell_data(cn).g + 0.5);
+			d = min(d, piece_cell_box(p, cn, mn, r));
+			if ((mn & 4) != 0) {
+				vec2 cd2 = cn + vec2(0.0, -1.0);
+				d = min(d, piece_cell_box(p, cd2, int(cell_data(cd2).g + 0.5), r));
+			}
+			if ((mn & 8) != 0) {
+				vec2 cd2 = cn + vec2(0.0, 1.0);
+				d = min(d, piece_cell_box(p, cd2, int(cell_data(cd2).g + 0.5), r));
+			}
+		}
+	}
+	for (int s = 0; s < 2; s++) {
+		float sy = s == 0 ? -1.0 : 1.0;
+		int bit = s == 0 ? 4 : 8;
+		if ((m0 & bit) != 0) {
+			vec2 cn = cc0 + vec2(0.0, sy);
+			int mn = int(cell_data(cn).g + 0.5);
+			d = min(d, piece_cell_box(p, cn, mn, r));
+			if ((mn & 1) != 0) {
+				vec2 cd2 = cn + vec2(-1.0, 0.0);
+				d = min(d, piece_cell_box(p, cd2, int(cell_data(cd2).g + 0.5), r));
+			}
+			if ((mn & 2) != 0) {
+				vec2 cd2 = cn + vec2(1.0, 0.0);
+				d = min(d, piece_cell_box(p, cd2, int(cell_data(cd2).g + 0.5), r));
+			}
+		}
+	}
+	return d - r;
+}
+
+// Glass SDF as seen from an EMPTY cell: union of the three corner-sharing
+// neighbors' boxes (q = quadrant of the pixel within its cell). Junction
+// fillets spill up to r past the cell line into empty cells — without this
+// they get clipped mid-arc (missing outline bites at bends).
+float empty_cell_sdf(vec2 p, vec2 cc0, vec2 q, float r) {
+	float d = 1e6;
+	vec2 n1 = cc0 + vec2(q.x, 0.0);
+	vec2 n2 = cc0 + vec2(0.0, q.y);
+	vec2 n3 = cc0 + q;
+	vec2 t1 = cell_data(n1);
+	if (get_color(t1.r).a > 0.01) {
+		d = min(d, piece_cell_box(p, n1, int(t1.g + 0.5), r));
+	}
+	vec2 t2 = cell_data(n2);
+	if (get_color(t2.r).a > 0.01) {
+		d = min(d, piece_cell_box(p, n2, int(t2.g + 0.5), r));
+	}
+	vec2 t3 = cell_data(n3);
+	if (get_color(t3.r).a > 0.01) {
+		d = min(d, piece_cell_box(p, n3, int(t3.g + 0.5), r));
+	}
+	return d - r;
 }
 
 // Accumulate signed distance (+gradient) to one splash/wall cell —
@@ -188,23 +320,30 @@ void fragment() {
 	vec2 wall_g;
 	float near_type;
 	wall_field(px, cell_coord, wall_sd, wall_g, near_type);
-	float sdf = max(bsdf, -wall_sd); // glass SDF: walls cut in like edges
-
-	// w: 0 at any wall, 1 in open water (button formula)
+	// Separate proximity fields. The rim lens spans the whole board, but
+	// wall_field only sees a 3x3 cell window — the wall term must decay to
+	// zero INSIDE that window (< 1 cell) or its cutoff shows up as hard
+	// per-tile creases in both the warp and the blur.
 	float max_dist = min(half_size.x, half_size.y) * 0.5;
-	float w = clamp(-sdf / max_dist, 0.0, 1.0);
+	vec2 cell_dim = rect_size / cell_count;
+	float wall_range = 0.9 * min(cell_dim.x, cell_dim.y);
+	float w_rim = clamp(-bsdf / max_dist, 0.0, 1.0);
+	float w_wall = clamp(wall_sd / wall_range, 0.0, 1.0);
+	// Union proximity (0 at rim or block, 1 in open water): blur/chroma/sheen
+	float w = min(w_rim, w_wall);
 
-	// Direction toward the nearest wall (button: radial from center)
-	float gx = rounded_box_sdf(px + vec2(1.0, 0.0), half_size, corner_radius_px)
-	         - rounded_box_sdf(px - vec2(1.0, 0.0), half_size, corner_radius_px);
-	float gy = rounded_box_sdf(px + vec2(0.0, 1.0), half_size, corner_radius_px)
-	         - rounded_box_sdf(px - vec2(0.0, 1.0), half_size, corner_radius_px);
-	vec2 grad_o = normalize(vec2(gx, gy) + vec2(1e-5, 0.0));
-	vec2 uv_dir = (-bsdf) <= wall_sd ? grad_o : -wall_g;
+	// Direction toward the nearest wall. NOT the SDF gradient: a box SDF's
+	// gradient is piecewise-constant and flips across the corner diagonals,
+	// which the strong warp turns into a visible crease. The aspect-
+	// normalized radial field (what the buttons use) is continuous.
+	vec2 grad_o = normalize(px / half_size + vec2(1e-5, 0.0));
+	vec2 uv_dir = w_rim <= w_wall ? grad_o : -wall_g;
 
-	// ── Refraction warp (button-identical Gaussian edge bulge) ──
-	float warp_falloff = exp(-warp_strength * w * w);
-	vec2 warp_offset = uv_dir * warp_falloff * warp_intensity / 10.0;
+	// ── Refraction warp: big lens at the rim, tight meniscus at blocks ──
+	float rim_fall = exp(-warp_strength * w_rim * w_rim);
+	float wall_fall = exp(-8.0 * w_wall * w_wall) * (1.0 - w_wall);
+	vec2 warp_offset = grad_o * rim_fall * warp_intensity / 10.0
+	                 + (-wall_g) * wall_fall * wall_warp_intensity / 10.0;
 
 	// ── Water waves: travelling ripples add to warp_offset ──
 	float t = TIME * wave_speed;
@@ -264,21 +403,26 @@ void fragment() {
 	float ca = edge_proximity * chromatic_strength;
 	vec2 chroma_offset = uv_dir * ca * SCREEN_PIXEL_SIZE;
 
-	float bg_r = textureLod(bg_tex, warped_uv - chroma_offset, blur_amount).r;
-	float bg_g = textureLod(bg_tex, warped_uv, blur_amount).g;
-	float bg_b = textureLod(bg_tex, warped_uv + chroma_offset, blur_amount).b;
-	vec3 bg = vec3(bg_r, bg_g, bg_b);
+	// Per-pixel blur: SHARP at the refracting rim (and around the locked
+	// stack, which is also "edge") so the bent content is recognizable —
+	// this is what makes the lens read as liquid — frosted in the interior.
+	float lod = blur_amount * smoothstep(0.03, 0.45, w);
+	float bg_r = textureLod(bg_tex, warped_uv - chroma_offset, lod).r;
+	float bg_g = textureLod(bg_tex, warped_uv, lod).g;
+	float bg_b = textureLod(bg_tex, warped_uv + chroma_offset, lod).b;
+	vec3 bg = vec3(bg_r, bg_g, bg_b) * (1.0 - bg_dim);
 
 	// ── Tint the glass (button-identical) ──
 	vec3 color = mix(bg, glass_tint.rgb, glass_tint.a);
 
-	// ── Edge rim light (button-identical, traces walls too) ──
-	float rim = (1.0 - smoothstep(0.0, border_width, -sdf)) * step(sdf, 0.0);
+	// ── Edge rim light (outer boundary only — each glass tile draws its
+	// own rim, so tracing the walls here would double-outline every block) ──
+	float rim = (1.0 - smoothstep(0.0, border_width, -bsdf)) * step(bsdf, 0.0);
 	rim *= rim_intensity;
 	color = mix(color, border_color.rgb, rim * border_color.a);
 
-	// ── Border stroke (button-identical, traces walls too) ──
-	float border = 1.0 - smoothstep(border_width - 1.5, border_width + 1.5, abs(sdf));
+	// ── Border stroke (outer boundary only) ──
+	float border = 1.0 - smoothstep(border_width - 1.5, border_width + 1.5, abs(bsdf));
 	color = mix(color, border_color.rgb, border * border_color.a);
 
 	// ── Top specular sheen (button-identical) ──
@@ -298,38 +442,90 @@ void fragment() {
 		bool in_pad = local_uv.x < pad_min.x || local_uv.x > pad_max.x ||
 		              local_uv.y < pad_min.y || local_uv.y > pad_max.y;
 
+		// ── Locked pieces: one merged liquid-glass container per piece ──
+		// Cells of the same tetromino fuse into a single rounded shape
+		// (the SDF fills the padding gaps between connected cells).
+		vec2 cdata = cell_data(cell_coord);
+		vec4 cc = get_color(cdata.r);
+		int cmask = int(cdata.g + 0.5);
+		float rr = 0.28 * min(cell_dim.x, cell_dim.y);
+		vec2 quad = sign(local_uv - 0.5);
+		bool occupied = cc.a > 0.01;
+		float tile_sdf = occupied
+			? merged_piece_sdf(px, cell_coord, cmask, rr)
+			: empty_cell_sdf(px, cell_coord, quad, rr);
+		float tile_alpha = 1.0 - smoothstep(-0.75, 0.75, tile_sdf);
+
+		// Grid line — barely-there etched line, hidden under glass
 		if (in_pad) {
-			// Grid line — barely-there etched line
-			color *= 0.9;
-		} else {
-			float tex_u = (cell_coord.x + 0.5) / 10.0;
-			float tex_v = (cell_coord.y + vanish_offset + 0.5) / 22.0;
-			float piece_type = texture(board_tex, vec2(tex_u, tex_v)).r;
+			color *= mix(0.9, 1.0, tile_alpha);
+		}
 
-			vec4 cc = get_color(piece_type);
-			if (cc.a > 0.01) {
-				// Piece color in HDR: only these pixels cross the bloom
-				// threshold, so only blocks emit — nothing else glows.
-				color = cc.rgb * (1.0 + block_emission);
-
-				// Flash
-				if (flash_intensity > 0.01) {
-					if (cell_coord.y == flash_rows.x || cell_coord.y == flash_rows.y ||
-					    cell_coord.y == flash_rows.z || cell_coord.y == flash_rows.w) {
-						color = mix(color, vec3(2.0), flash_intensity * 0.8);
-					}
-				}
-				// Subtle highlight
-				vec2 inner_uv = (local_uv - pad_min) / (pad_max - pad_min);
-				color += smoothstep(0.6, 1.0, inner_uv.y) * 0.06;
+		if (tile_alpha > 0.001) {
+			// Lens direction from the merged surface (numerical gradient)
+			// so refraction flows continuously across the whole piece
+			float dgx;
+			float dgy;
+			if (occupied) {
+				dgx = merged_piece_sdf(px + vec2(1.0, 0.0), cell_coord, cmask, rr) - tile_sdf;
+				dgy = merged_piece_sdf(px + vec2(0.0, 1.0), cell_coord, cmask, rr) - tile_sdf;
+			} else {
+				dgx = empty_cell_sdf(px + vec2(1.0, 0.0), cell_coord, quad, rr) - tile_sdf;
+				dgy = empty_cell_sdf(px + vec2(0.0, 1.0), cell_coord, quad, rr) - tile_sdf;
 			}
+			vec2 dirc = normalize(vec2(dgx, dgy) + vec2(1e-5, 0.0));
+
+			// Piece color: optionally melted into the neighbors' colors.
+			// Empty-cell fillet pixels always use the blend (no own color).
+			vec3 piece_col = blended_block_color(grid_pos);
+			if (occupied) {
+				piece_col = mix(cc.rgb, piece_col, block_color_blend);
+			}
+
+			float half_min = min(cell_dim.x, cell_dim.y) * 0.5;
+			float wc = clamp(-tile_sdf / half_min, 0.0, 1.0);
+			float fallc = exp(-8.0 * wc * wc);
+			vec2 tuv = SCREEN_UV - dirc * fallc * block_warp_intensity / 10.0;
+			float tlod = blur_amount * 0.35;
+			vec3 tbg = vec3(
+				textureLod(bg_tex, tuv - chroma_offset, tlod).r,
+				textureLod(bg_tex, tuv, tlod).g,
+				textureLod(bg_tex, tuv + chroma_offset, tlod).b);
+			vec3 tile_col = mix(tbg, piece_col, block_tint_alpha);
+
+			// Rim stroke in HDR piece color: the bloom traces the merged
+			// outline of the whole piece instead of flooding the face
+			float rimc = 1.0 - smoothstep(0.0, 3.0, abs(tile_sdf));
+			tile_col = mix(tile_col, piece_col * (1.0 + block_emission), rimc * 0.85);
+
+			// Top sheen — only on occupied cells whose top edge is exposed
+			if (occupied && (cmask & 4) == 0) {
+				vec2 inner_uv = (local_uv - pad_min) / (pad_max - pad_min);
+				tile_col += smoothstep(0.35, 0.0, inner_uv.y) * 0.08;
+			}
+
+			// Flash
+			if (flash_intensity > 0.01) {
+				if (cell_coord.y == flash_rows.x || cell_coord.y == flash_rows.y ||
+				    cell_coord.y == flash_rows.z || cell_coord.y == flash_rows.w) {
+					tile_col = mix(tile_col, vec3(2.0), flash_intensity * 0.8);
+				}
+			}
+			color = mix(color, tile_col, tile_alpha);
 		}
 	}
 
 	// ── Ghost hole: see-through window with a piece-color wash ──
 	float hole_mask = (1.0 - smoothstep(-0.75, 0.75, hs)) * shape_alpha;
-	color = mix(color, ghost_color.rgb, hole_mask);
+	float pulse = 0.75 + 0.25 * sin(TIME * ghost_pulse_speed);
+	color = mix(color, ghost_color.rgb * (0.8 + 0.4 * pulse), hole_mask);
 	float alpha_out = mix(shape_alpha, ghost_color.a, hole_mask);
+
+	// Emissive rim traces the hole outline; pulses to draw the eye
+	float ghost_rim = (1.0 - smoothstep(0.0, ghost_rim_px, abs(hs))) * shape_alpha;
+	vec3 rim_hdr = ghost_color.rgb * (1.0 + ghost_glow * pulse);
+	color = mix(color, rim_hdr, ghost_rim);
+	alpha_out = max(alpha_out, ghost_rim);
 
 	COLOR = vec4(color, alpha_out);
 }

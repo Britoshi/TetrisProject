@@ -59,9 +59,9 @@ const MAX_LEVEL: int = 15    # gravity caps here
 const LOCK_DELAY: float = 0.5
 const MAX_LOCK_RESETS: int = 15
 
-const DAS_INITIAL: float = 0.167   # 10 frames at 60 Hz
-const DAS_REPEAT: float = 0.033    # 2 frames at 60 Hz
-const SOFT_DROP_FACTOR: float = 0.05  # seconds per row during soft drop
+const DAS_INITIAL: float = 0.125   # delay before auto-shift kicks in
+const DAS_REPEAT: float = 0.02     # auto-shift rate (50 Hz — smooth at 120 fps)
+const SOFT_DROP_FACTOR: float = 0.02  # seconds per row during soft drop (50/s)
 
 # ── Scoring ──
 const SCORE_SINGLE: int = 100
@@ -93,20 +93,17 @@ static func calculate_layout(viewport_size: Vector2) -> Dictionary:
 	var vw: float = viewport_size.x
 	var vh: float = viewport_size.y
 
-	# Reserve bottom portion for mobile buttons
-	var button_area_h: float = maxf(vh * 0.25, 140.0)
-	var board_area_h: float = vh - button_area_h
-
-	# Fit board in available space with 5% margin
-	var margin: float = 0.05
+	# Fit the board to the screen HEIGHT (small margin); the width is only a
+	# fallback cap so the board never spills off narrow/portrait screens.
+	var margin: float = 0.04
+	var cell_h: int = int((vh * (1.0 - margin)) / VISIBLE_ROWS)
 	var cell_w: int = int((vw * (1.0 - margin * 2)) / COLS)
-	var cell_h: int = int((board_area_h * (1.0 - margin)) / VISIBLE_ROWS)
-	var cell_size: int = maxi(8, mini(cell_w, cell_h))
+	var cell_size: int = maxi(8, mini(cell_h, cell_w))
 
 	var board_px_w: int = cell_size * COLS
 	var board_px_h: int = cell_size * VISIBLE_ROWS
 	var board_x: int = int((vw - board_px_w) / 2.0)
-	var board_y: int = int((board_area_h - board_px_h) / 2.0)
+	var board_y: int = int((vh - board_px_h) / 2.0)
 
 	var font_scale: float = cell_size / 32.0  # relative to default 32px cell
 	var button_max_w: float = minf(vw / 3.5, 180.0)
