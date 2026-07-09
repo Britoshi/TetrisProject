@@ -91,35 +91,41 @@ void fragment() {
 	float touch_ca_boost = 0.0;
 
 	if (touch_uv.x >= 0.0 && touch_depth > 0.005) {
-		// Depression: inward bulge that fades with distance from touch point.
-		// Like pressing your finger into a water droplet surface.
-		float depress_radius = 0.08 + touch_depth * 0.04;
-		float depression = exp(-touch_dist * touch_dist / (depress_radius * depress_radius)) * touch_depth;
 		vec2 touch_dir = touch_dist > 0.001 ? (touch_uv - UV) / touch_dist : vec2(0.0);
-		warp_offset += touch_dir * depression * 0.025;
 
-		// Ripple: expanding ring on press/release, driven by time since event.
+		// Depression: strong inward bulge at touch point
+		float depress_radius = 0.07 + touch_depth * 0.05;
+		float depression = exp(-touch_dist * touch_dist / (depress_radius * depress_radius)) * touch_depth;
+		warp_offset += touch_dir * depression * 0.04;
+
+		// Ripple: expanding rings on press/release (slower, more visible)
 		float time_since = TIME - touch_time;
-		float ripple_life = clamp(time_since * 3.5, 0.0, 1.0); // 0→1 over ~0.3s
-		float ripple_radius = ripple_life * 0.55;
-		float ripple_width = 0.035 * (1.0 - ripple_life * 0.7);
+		float ripple_life = clamp(time_since * 2.0, 0.0, 1.0); // 0→1 over 0.5s
+		float ripple_radius = ripple_life * 0.5;
+		float ripple_width = 0.05 * (1.0 - ripple_life * 0.5);
 		float ripple = smoothstep(ripple_radius - ripple_width, ripple_radius, touch_dist)
 		             - smoothstep(ripple_radius, ripple_radius + ripple_width, touch_dist);
-		// Ripple fades as it expands (energy dissipates)
-		ripple *= (1.0 - ripple_life) * 0.7 * touch_depth;
-		warp_offset += touch_dir * ripple * 0.015;
+		ripple *= (1.0 - ripple_life) * touch_depth;
+		warp_offset += touch_dir * ripple * 0.03;
 
-		// Secondary ripple (smaller, follows primary)
-		float ripple2_radius = ripple_radius - 0.08;
-		if (ripple2_radius > 0.0) {
-			float ripple2 = smoothstep(ripple2_radius - ripple_width * 0.8, ripple2_radius, touch_dist)
-			              - smoothstep(ripple2_radius, ripple2_radius + ripple_width * 0.6, touch_dist);
-			ripple2 *= (1.0 - ripple_life) * 0.35 * touch_depth;
-			warp_offset += touch_dir * ripple2 * 0.01;
+		// Secondary ring
+		float r2_radius = ripple_radius - 0.1;
+		if (r2_radius > 0.0) {
+			float r2 = smoothstep(r2_radius - ripple_width * 0.7, r2_radius, touch_dist)
+			         - smoothstep(r2_radius, r2_radius + ripple_width * 0.5, touch_dist);
+			r2 *= (1.0 - ripple_life) * 0.4 * touch_depth;
+			warp_offset += touch_dir * r2 * 0.015;
 		}
 
-		// Chromatic aberration intensifies near touch point (applied below)
-		touch_ca_boost = exp(-touch_dist * touch_dist * 80.0) * touch_depth * 1.5;
+		// Ongoing micro-pulse while held (glass "breathing")
+		float settled = clamp((touch_depth - 0.9) * 10.0, 0.0, 1.0);
+		float pulse = (sin(TIME * 7.0 + touch_dist * 25.0) * 0.012
+		             + cos(TIME * 11.0 - touch_dist * 18.0) * 0.008) * settled
+		             * exp(-touch_dist * touch_dist * 50.0);
+		warp_offset += touch_dir * pulse;
+
+		// Chromatic aberration boost near touch
+		touch_ca_boost = exp(-touch_dist * touch_dist * 70.0) * touch_depth * 2.5;
 	}
 
 	vec2 warped_uv = SCREEN_UV - warp_offset;

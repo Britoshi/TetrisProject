@@ -757,6 +757,9 @@ func _gui_input(event: InputEvent) -> void:
 		if _mode == Mode.EDIT:
 			_drag_edit(event.position, event.index)
 			accept_event()
+		elif _mode == Mode.NORMAL:
+			_drag_normal(event.position, event.index)
+			accept_event()
 
 
 # ── NORMAL mode ──
@@ -778,7 +781,7 @@ func _touch_normal(pos: Vector2, pressed: bool, index: int) -> void:
 				_btn_shaders[i].set_shader_parameter("pressed", 1.0)
 				# Trigger waterdrop wobble at touch point
 				var uv := Vector2((pos.x - _btn_rects[i].position.x) / _btn_rects[i].size.x,
-				                  (pos.y - _btn_rects[i].position.y) / _btn_rects[i].size.y)
+								  (pos.y - _btn_rects[i].position.y) / _btn_rects[i].size.y)
 				_wobble_touch_uv[i] = uv
 				_wobble_target[i] = 1.0
 				_wobble_event_time[i] = _elapsed
@@ -797,6 +800,40 @@ func _release_normal_touch(index: int) -> void:
 		# Trigger release ripple
 		_wobble_target[i] = 0.0
 		_wobble_event_time[i] = _elapsed
+
+
+func _drag_normal(pos: Vector2, index: int) -> void:
+	"""Update wobble touch point as finger slides; cross-fade to adjacent buttons."""
+	if not (index in _touch_map):
+		return
+	var ci: int = _touch_map[index]
+
+	# If finger is still on the same button, just update the UV
+	if _btn_rects[ci].has_point(pos):
+		var uv := Vector2((pos.x - _btn_rects[ci].position.x) / _btn_rects[ci].size.x,
+		                  (pos.y - _btn_rects[ci].position.y) / _btn_rects[ci].size.y)
+		_wobble_touch_uv[ci] = uv
+		return
+
+	# Finger slid to another button — release current, press new
+	Input.action_release(_btn_actions[ci])
+	_btn_shaders[ci].set_shader_parameter("pressed", 0.0)
+	_wobble_target[ci] = 0.0
+	_wobble_event_time[ci] = _elapsed
+
+	for i in range(_btn_rects.size()):
+		if _btn_rects[i].has_point(pos):
+			_haptic_pulse()
+			Input.action_press(_btn_actions[i])
+			_touch_map[index] = i
+			_btn_pressed[i] = true
+			_btn_shaders[i].set_shader_parameter("pressed", 1.0)
+			var uv := Vector2((pos.x - _btn_rects[i].position.x) / _btn_rects[i].size.x,
+			                  (pos.y - _btn_rects[i].position.y) / _btn_rects[i].size.y)
+			_wobble_touch_uv[i] = uv
+			_wobble_target[i] = 1.0
+			_wobble_event_time[i] = _elapsed
+			return
 
 
 # ── SETTINGS mode ──
