@@ -14,8 +14,8 @@ uniform float vanish_offset = 2.0;
 uniform float cell_padding : hint_range(0.0, 0.2) = 0.04;
 
 // Liquid glass background
-uniform float glass_blur : hint_range(0.0, 8.0) = 3.0;
-uniform vec4 glass_tint : source_color = vec4(0.04, 0.04, 0.07, 0.85);
+uniform float glass_blur : hint_range(0.0, 8.0) = 1.0;
+uniform vec4 glass_tint : source_color = vec4(0.0, 0.0, 0.0, 0.2);
 
 // Piece colors (set from Constants.COLORS)
 uniform vec4 color_empty : source_color = vec4(0.05, 0.05, 0.08, 1.0);
