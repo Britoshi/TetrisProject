@@ -414,6 +414,29 @@ func _update_board_texture() -> void:
 			_board_image.set_pixel(c, r, Color(val, 0, 0, 1))
 	_board_texture.update(_board_image)
 
+func _set_game_nodes_visible(v: bool) -> void:
+	"""Show/hide all game rendering nodes (board, pieces, HUD, previews)."""
+	if _board_rect:
+		_board_rect.visible = v
+	if _piece_container:
+		_piece_container.visible = v
+	if _ghost_container:
+		_ghost_container.visible = v
+	if _score_label:
+		_score_label.visible = v
+		_lines_label.visible = v
+		_level_label.visible = v
+		_time_label.visible = v
+		_hold_title_label.visible = v
+		_next_title_label.visible = v
+	if _hold_container:
+		_hold_container.visible = v
+	if _next_container:
+		_next_container.visible = v
+	if _bg_fallback_rect:
+		_bg_fallback_rect.visible = v and not _bg_ok
+
+
 func _update_piece_positions() -> void:
 	"""Position active piece cells each frame."""
 	if state != State.PLAYING or controller.is_locked:
@@ -643,15 +666,18 @@ func _process(delta: float) -> void:
 
 	match state:
 		State.SPRINT_MENU:
-			pass  # input handled via _input()
+			_set_game_nodes_visible(false)
 		State.PLAYING:
+			_set_game_nodes_visible(true)
 			_process_playing(delta)
 		State.LINE_CLEAR:
+			_set_game_nodes_visible(true)
 			_process_line_clear(delta)
 		State.GAME_OVER:
+			_set_game_nodes_visible(true)
 			_process_game_over(delta)
 		State.SPRINT_COMPLETE:
-			pass  # input handled via _input()
+			_set_game_nodes_visible(false)
 
 	# ── Shader-based rendering updates (every frame) ──
 	if state != State.SPRINT_MENU and state != State.SPRINT_COMPLETE:
