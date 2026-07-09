@@ -15,7 +15,10 @@
       "Read(//root/.claude/**)",
       "Read(//root/.claude/projects/**)",
       "Bash(gh repo *)",
-      "Bash(xxd)"
+      "Bash(xxd)",
+      "WebSearch",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:godotshaders.com)"
     ]
   }
 }

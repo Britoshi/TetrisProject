@@ -80,6 +80,16 @@ var _btn_aspect: float = BTN_ASPECT_DEFAULT
 # ── Touch tracking ──
 var _touch_map: Dictionary = {}
 
+# ── Waterdrop wobble spring state (per button) ──
+const WOBBLE_STIFFNESS: float = 120.0
+const WOBBLE_DAMPING: float = 16.0
+var _wobble_value: Array[float] = []
+var _wobble_velocity: Array[float] = []
+var _wobble_target: Array[float] = []
+var _wobble_touch_uv: Array[Vector2] = []
+var _wobble_event_time: Array[float] = []
+var _elapsed: float = 0.0
+
 # ── Theme ──
 var _active_theme_name: String = DEFAULT_THEME
 var _active_theme: Dictionary = {}  # populated in _ready()
@@ -277,6 +287,11 @@ func _create_game_buttons() -> void:
 		_btn_subs.append(sub)
 
 		_btn_pressed.append(false)
+		_wobble_value.append(0.0)
+		_wobble_velocity.append(0.0)
+		_wobble_target.append(0.0)
+		_wobble_touch_uv.append(Vector2(-1.0, -1.0))
+		_wobble_event_time.append(-10.0)
 
 	_btn_rects.resize(DEFAULT_BUTTONS.size())
 
@@ -427,6 +442,8 @@ func _position_button(i: int, rect: Rect2) -> void:
 	var min_dim := minf(rect.size.x, rect.size.y)
 	var body_corner_px: float = BTN_CORNER_RADIUS_FRAC * min_dim
 	_btn_shaders[i].set_shader_parameter("corner_radius", body_corner_px / maxf(rect.size.x, 1.0))
+	_btn_shaders[i].set_shader_parameter("touch_uv", Vector2(-1.0, -1.0))
+	_btn_shaders[i].set_shader_parameter("touch_depth", 0.0)
 	# Shadow panel: smaller radius stays inside squircle body
 	panel.add_theme_stylebox_override("panel", _make_shadow_style(int(body_corner_px * 0.7)))
 
@@ -667,13 +684,62 @@ func _layout_edit_toolbar() -> void:
 # ═══════════════════════════════════════════════════════════
 
 func _process(_delta: float) -> void:
+	_elapsed += _delta
+
 	if _mode != Mode.NORMAL:
+		# Still decay wobble springs in settings/edit mode
+		for i in range(_btn_panels.size()):
+			_wobble_target[i] = 0.0  # release all wobbles
+			var val = _wobble_value[i]
+			if abs(val) < 0.002 and abs(_wobble_velocity[i]) < 0.01:
+				_wobble_value[i] = 0.0
+				_wobble_velocity[i] = 0.0
+				_wobble_touch_uv[i] = Vector2(-1.0, -1.0)
+				_btn_shaders[i].set_shader_parameter("touch_uv", Vector2(-1.0, -1.0))
+				_btn_shaders[i].set_shader_parameter("touch_depth", 0.0)
+				continue
+			var force = WOBBLE_STIFFNESS * (_wobble_target[i] - val) - WOBBLE_DAMPING * _wobble_velocity[i]
+			_wobble_velocity[i] += force * _delta
+			_wobble_value[i] = clampf(val + _wobble_velocity[i] * _delta, -0.15, 1.15)
+			_btn_shaders[i].set_shader_parameter("touch_depth", _wobble_value[i])
 		return
+
 	for i in range(_btn_panels.size()):
+		# ── Static press (keyboard/gamepad) ──
 		var pressed := Input.is_action_pressed(_btn_actions[i])
 		if _btn_pressed[i] != pressed:
 			_btn_pressed[i] = pressed
 			_btn_shaders[i].set_shader_parameter("pressed", 1.0 if pressed else 0.0)
+			# Trigger wobble on keyboard press too
+			if pressed:
+				_wobble_touch_uv[i] = Vector2(0.5, 0.5)  # center press
+				_wobble_target[i] = 1.0
+				_wobble_event_time[i] = _elapsed
+			else:
+				_wobble_target[i] = 0.0
+				_wobble_event_time[i] = _elapsed
+
+		# ── Update wobble spring ──
+		var val = _wobble_value[i]
+		var vel = _wobble_velocity[i]
+		var target = _wobble_target[i]
+		if abs(val - target) > 0.0005 or abs(vel) > 0.001:
+			var force = WOBBLE_STIFFNESS * (target - val) - WOBBLE_DAMPING * vel
+			vel += force * _delta
+			val += vel * _delta
+			val = clampf(val, -0.15, 1.15)
+			_wobble_value[i] = val
+			_wobble_velocity[i] = vel
+			_btn_shaders[i].set_shader_parameter("touch_uv", _wobble_touch_uv[i])
+			_btn_shaders[i].set_shader_parameter("touch_depth", val)
+			_btn_shaders[i].set_shader_parameter("touch_time", _wobble_event_time[i])
+		elif abs(val) < 0.002:
+			# Snap to zero when settled
+			_wobble_value[i] = 0.0
+			_wobble_velocity[i] = 0.0
+			_wobble_touch_uv[i] = Vector2(-1.0, -1.0)
+			_btn_shaders[i].set_shader_parameter("touch_uv", Vector2(-1.0, -1.0))
+			_btn_shaders[i].set_shader_parameter("touch_depth", 0.0)
 
 
 # ═══════════════════════════════════════════════════════════
@@ -710,6 +776,12 @@ func _touch_normal(pos: Vector2, pressed: bool, index: int) -> void:
 				_touch_map[index] = i
 				_btn_pressed[i] = true
 				_btn_shaders[i].set_shader_parameter("pressed", 1.0)
+				# Trigger waterdrop wobble at touch point
+				var uv := Vector2((pos.x - _btn_rects[i].position.x) / _btn_rects[i].size.x,
+				                  (pos.y - _btn_rects[i].position.y) / _btn_rects[i].size.y)
+				_wobble_touch_uv[i] = uv
+				_wobble_target[i] = 1.0
+				_wobble_event_time[i] = _elapsed
 				return
 	else:
 		_release_normal_touch(index)
@@ -722,6 +794,9 @@ func _release_normal_touch(index: int) -> void:
 		_touch_map.erase(index)
 		_btn_pressed[i] = false
 		_btn_shaders[i].set_shader_parameter("pressed", 0.0)
+		# Trigger release ripple
+		_wobble_target[i] = 0.0
+		_wobble_event_time[i] = _elapsed
 
 
 # ── SETTINGS mode ──
