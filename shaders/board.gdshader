@@ -132,5 +132,5 @@ void fragment() {
 		}
 	}
 
-	COLOR = vec4(color, board_alpha);
+	COLOR = vec4(color, 1.0);
 }
