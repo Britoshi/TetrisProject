@@ -374,6 +374,7 @@ func _create_board_node() -> void:
 	_board_material.set_shader_parameter("splash_strength", 0.7)
 	_board_material.set_shader_parameter("splash_speed_px", 240.0)
 	_board_material.set_shader_parameter("hole_tilt", 0.35)
+	_board_material.set_shader_parameter("wall_tilt", 0.3)
 	_push_splash_uniform()
 
 	# Data texture (10x22, FORMAT_RF = 32-bit float per pixel)
@@ -779,6 +780,7 @@ func _position_all_nodes() -> void:
 		_board_material.set_shader_parameter("bevel_px", cs * 2.0)
 		_board_material.set_shader_parameter("thickness_px", cs * 2.6)
 		_board_material.set_shader_parameter("hole_bevel_px", cs * 0.9)
+		_board_material.set_shader_parameter("wall_bevel_px", cs * 0.8)
 		if _bg_bake_size != get_viewport_rect().size:
 			_bake_board_bg()
 

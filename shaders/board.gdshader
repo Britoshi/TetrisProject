@@ -61,6 +61,11 @@ uniform float ghost_round = 4.0;                              // hole corner rou
 uniform float hole_bevel_px : hint_range(1.0, 200.0) = 34.0;  // lens rim width around the hole
 uniform float hole_tilt : hint_range(0.0, 1.0) = 0.35;        // hole rim refraction strength
 uniform vec4 ghost_color : source_color = vec4(1.0, 1.0, 1.0, 0.28); // piece-color wash over the window
+
+// Locked blocks are solid land: the water forms a meniscus where it
+// laps against the stack.
+uniform float wall_bevel_px : hint_range(1.0, 200.0) = 30.0;  // meniscus width at the stack
+uniform float wall_tilt : hint_range(0.0, 1.0) = 0.3;         // meniscus refraction strength
 uniform float saturation : hint_range(0.5, 2.0) = 1.35;      // vibrancy
 uniform float brightness : hint_range(0.5, 1.5) = 1.06;
 uniform float spec_intensity : hint_range(0.0, 3.0) = 1.0;
@@ -140,6 +145,31 @@ void cell_sdf(vec2 rel, float hc, inout float sd, inout vec2 sg) {
 	}
 }
 
+// Distance (+gradient) from p to the nearest locked block among the
+// 3x3 cells around cell_coord. sd stays huge when no block is near.
+void wall_field(vec2 p, vec2 cc0, out float sd, out vec2 sg) {
+	sd = 1e6;
+	sg = vec2(0.0, 1.0);
+	vec2 cell_px = rect_size / cell_count;
+	float hc = min(cell_px.x, cell_px.y) * 0.5;
+	for (int j = -1; j <= 1; j++) {
+		for (int k = -1; k <= 1; k++) {
+			vec2 cc = cc0 + vec2(float(j), float(k));
+			if (cc.x < 0.0 || cc.x >= cell_count.x ||
+			    cc.y < 0.0 || cc.y >= cell_count.y) {
+				continue;
+			}
+			float ptype = texture(board_tex,
+				vec2((cc.x + 0.5) / 10.0, (cc.y + vanish_offset + 0.5) / 22.0)).r;
+			if (ptype < 0.5) {
+				continue;
+			}
+			vec2 center = ((cc + 0.5) / cell_count - 0.5) * rect_size;
+			cell_sdf(p - center, hc, sd, sg);
+		}
+	}
+}
+
 // Refract the straight-down view ray through the slab surface and
 // project it across the glass thickness onto the background plane.
 vec2 refract_offset(vec3 n, float eta) {
@@ -184,8 +214,18 @@ void fragment() {
 		lat_hole = grad_h * bev_hole * hole_tilt;
 	}
 
-	float bev = max(bev_out, bev_hole);
-	vec2 lat = grad_o * bev_out + lat_hole;
+	// Wall meniscus: water tilts up where it laps against the locked stack
+	vec2 grid_pos = UV * cell_count;
+	vec2 cell_coord = floor(grid_pos);
+	float wall_sd;
+	vec2 wall_g;
+	wall_field(px, cell_coord, wall_sd, wall_g);
+	float bev_wall = clamp(1.0 - max(wall_sd, 0.0) / wall_bevel_px, 0.0, 1.0);
+	bev_wall *= bev_wall; // eased shoulder
+	vec2 lat_wall = wall_sd > 0.0 ? wall_g * bev_wall * wall_tilt : vec2(0.0);
+
+	float bev = max(max(bev_out, bev_hole), bev_wall);
+	vec2 lat = grad_o * bev_out + lat_hole + lat_wall;
 
 	// ── Water surface: sum of travelling directional waves ──
 	// Four octaves: slow swell (~300px), waves (~150px), chop (~75px),
@@ -285,8 +325,12 @@ void fragment() {
 	// Fresnel-ish bright band hugging the whole rim
 	float fresnel = pow(nxy, 3.0) * 0.16;
 
-	// Hairline at the very edge (outer rim and hole rim alike)
+	// Hairline at the very edge (outer rim and hole rim alike), plus a
+	// softer waterline tracing the stack contour
 	float hairline = (1.0 - smoothstep(0.0, rim_width_px, -csdf)) * 0.25;
+	if (wall_sd < 1e5) {
+		hairline += (1.0 - smoothstep(0.0, rim_width_px * 1.5, abs(wall_sd))) * 0.15;
+	}
 
 	color += rim_color.rgb * rim_color.a *
 	         (spec * spec_intensity + glint + fresnel + hairline +
@@ -297,8 +341,6 @@ void fragment() {
 	color += vec3(sheen);
 
 	// ── Cells on top of the glass ──
-	vec2 grid_pos = UV * cell_count;
-	vec2 cell_coord = floor(grid_pos);
 	vec2 local_uv = fract(grid_pos);
 
 	if (cell_coord.x >= 0.0 && cell_coord.x < cell_count.x &&
