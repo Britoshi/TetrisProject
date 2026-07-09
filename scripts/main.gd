@@ -96,7 +96,7 @@ var _next_materials: Array = []
 
 # Background fallback
 var _bg_fallback_rect: ColorRect = null
-var _bg_viewport: SubViewport = null
+var _bg_bake_size: Vector2 = Vector2.ZERO
 
 # Piece shader resource (shared by all piece cells)
 var _piece_shader: Shader = null
@@ -229,6 +229,60 @@ func _fit_background() -> void:
 	_bg_rect.position = Vector2.ZERO
 	_bg_rect.size = vp.size
 
+func _bake_board_bg() -> void:
+	"""Bake a cover-fitted, heavily blurred copy of the background into an
+	ImageTexture for the board glass shader. Sampled at SCREEN_UV, so it
+	lines up 1:1 with the real background. No screen capture involved —
+	works identically on every renderer."""
+	if _board_material == null:
+		return
+	var vp_size := get_viewport_rect().size
+	if vp_size.x < 1.0 or vp_size.y < 1.0:
+		return
+
+	var img: Image = null
+	var tex := load("res://videos/azure-horizon.png") as Texture2D
+	if tex:
+		img = tex.get_image()
+	if img != null and img.is_compressed():
+		img.decompress()
+
+	if img == null:
+		# Fallback: same gradient as background.gdshader
+		img = Image.create(8, 64, false, Image.FORMAT_RGB8)
+		for y in range(64):
+			var t := float(y) / 63.0
+			var col := Color(0.08, 0.08, 0.12).lerp(Color(0.12, 0.12, 0.18), t)
+			for x in range(8):
+				img.set_pixel(x, y, col)
+	else:
+		# Cover-fit crop to screen aspect (matches STRETCH_KEEP_ASPECT_COVERED)
+		var iw := img.get_width()
+		var ih := img.get_height()
+		var screen_aspect := vp_size.x / vp_size.y
+		var img_aspect := float(iw) / float(ih)
+		var crop_w := iw
+		var crop_h := ih
+		if img_aspect > screen_aspect:
+			crop_w = int(round(ih * screen_aspect))
+		else:
+			crop_h = int(round(iw / screen_aspect))
+		crop_w = clampi(crop_w, 1, iw)
+		crop_h = clampi(crop_h, 1, ih)
+		var ox := int((iw - crop_w) / 2.0)
+		var oy := int((ih - crop_h) / 2.0)
+		img = img.get_region(Rect2i(ox, oy, crop_w, crop_h))
+
+	# Blur = decimate hard, then smooth back up. At ~1/12 screen height each
+	# texel covers ~12px of screen; the cubic upscale removes bilinear facets.
+	var small_h := 96
+	var small_w := maxi(2, int(round(small_h * vp_size.x / vp_size.y)))
+	img.resize(small_w, small_h, Image.INTERPOLATE_LANCZOS)
+	img.resize(small_w * 3, small_h * 3, Image.INTERPOLATE_CUBIC)
+
+	_board_material.set_shader_parameter("bg_tex", ImageTexture.create_from_image(img))
+	_bg_bake_size = vp_size
+
 # ═══════════════════════════════════════════════════════════
 # ── Shader rendering node creation ──
 # ═══════════════════════════════════════════════════════════
@@ -277,44 +331,20 @@ func _create_board_node() -> void:
 	_game_layer.layer = 1
 	add_child(_game_layer)
 
-	# ── Background capture via SubViewport ──
-	_bg_viewport = SubViewport.new()
-	var bg_viewport := _bg_viewport
-	bg_viewport.name = "BoardBgViewport"
-	bg_viewport.size = get_viewport_rect().size
-	bg_viewport.render_target_update_mode = SubViewport.UPDATE_ALWAYS
-	bg_viewport.transparent_bg = false
-	bg_viewport.handle_input_locally = false
-	_game_layer.add_child(bg_viewport)
+	# ── Pre-blurred background for the glass (baked on CPU, renderer-proof) ──
+	_bake_board_bg()
 
-	# Copy background image into the SubViewport
-	var bg_copy := TextureRect.new()
-	bg_copy.name = "BgCopy"
-	bg_copy.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_COVERED
-	bg_copy.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	var bg_tex_res := load("res://videos/azure-horizon.png") as Texture2D
-	if bg_tex_res:
-		bg_copy.texture = bg_tex_res
-	else:
-		bg_copy.color = Color(0.1, 0.1, 0.15)
-	bg_viewport.add_child(bg_copy)
-
-	# Pass ViewportTexture to board shader
-	var vp_tex := bg_viewport.get_texture()
-	_board_material.set_shader_parameter("bg_tex", vp_tex)
-
-	# Glass uniforms
-	_board_material.set_shader_parameter("corner_radius", 0.08)
-	_board_material.set_shader_parameter("edge_smoothness", 1.2)
-	_board_material.set_shader_parameter("warp_intensity", 0.3)
-	_board_material.set_shader_parameter("warp_strength", 12.0)
-	_board_material.set_shader_parameter("blur_amount", 3.0)
-	_board_material.set_shader_parameter("chromatic_strength", 2.5)
-	_board_material.set_shader_parameter("rim_intensity", 0.35)
-	_board_material.set_shader_parameter("sheen_intensity", 0.08)
-	_board_material.set_shader_parameter("sheen_falloff", 0.4)
-	_board_material.set_shader_parameter("glass_tint", Color(0.03, 0.03, 0.08, 0.7))
-	_board_material.set_shader_parameter("rim_color", Color(1.0, 1.0, 1.0, 0.2))
+	# Glass uniforms (all in pixels — the shader works in pixel space)
+	_board_material.set_shader_parameter("blur_px", 3.0)
+	_board_material.set_shader_parameter("warp_band_px", 80.0)
+	_board_material.set_shader_parameter("warp_px", 30.0)
+	_board_material.set_shader_parameter("chroma_px", 6.0)
+	_board_material.set_shader_parameter("rim_width_px", 2.5)
+	_board_material.set_shader_parameter("rim_intensity", 0.9)
+	_board_material.set_shader_parameter("sheen_intensity", 0.10)
+	_board_material.set_shader_parameter("sheen_falloff", 0.35)
+	_board_material.set_shader_parameter("glass_tint", Color(0.05, 0.06, 0.12, 0.22))
+	_board_material.set_shader_parameter("rim_color", Color(1.0, 1.0, 1.0, 0.55))
 
 	# Colors from Constants.COLORS
 	var c := Constants.COLORS
@@ -667,12 +697,12 @@ func _position_all_nodes() -> void:
 		for i in range(_next_sub_containers.size()):
 			_next_sub_containers[i].position = Vector2(0, i * preview_spacing)
 
-	# SubViewport resize
-	if _bg_viewport:
-		var svp_size := get_viewport_rect().size
-		_bg_viewport.size = svp_size
-		if _bg_viewport.get_child_count() > 0:
-			_bg_viewport.get_child(0).size = svp_size
+	# Board shader geometry + re-bake blurred bg if the screen size changed
+	if _board_material:
+		_board_material.set_shader_parameter("rect_size", Vector2(board_w, board_h))
+		_board_material.set_shader_parameter("corner_radius_px", cs * 0.6)
+		if _bg_bake_size != get_viewport_rect().size:
+			_bake_board_bg()
 
 	# Background fallback
 	if _bg_fallback_rect:

@@ -1,31 +1,37 @@
 shader_type canvas_item;
 
-// board.gdshader — Liquid glass board panel with squircle SDF edges,
-// screen-space blur, chromatic aberration, rim light, and specular sheen.
-// Piece cells render as flat colors on top. Grid gaps between cells.
+// board.gdshader — Liquid glass board panel.
+// All distances are computed in PIXELS (rect_size uniform), not UV,
+// so tuning values mean what they say on any screen size.
+//
+// bg_tex is a pre-blurred, cover-fitted copy of the screen background
+// baked on the CPU (see main.gd _bake_board_bg). It is sampled at
+// SCREEN_UV, so it lines up 1:1 with the real background behind the
+// board. No screen capture / SubViewport needed.
 
 uniform sampler2D board_tex : repeat_disable, filter_nearest;
-uniform sampler2D bg_tex : repeat_disable, filter_linear_mipmap;
+uniform sampler2D bg_tex : repeat_disable, filter_linear;
+
+// Geometry (pixels)
+uniform vec2 rect_size = vec2(320.0, 640.0);
+uniform float corner_radius_px = 24.0;
 
 // Grid
 uniform vec2 cell_count = vec2(10.0, 20.0);
 uniform float vanish_offset = 2.0;
 uniform float cell_padding : hint_range(0.0, 0.2) = 0.04;
 
-// Board shape (squircle SDF)
-uniform float corner_radius : hint_range(0.0, 0.5) = 0.08;
-uniform float edge_smoothness : hint_range(0.5, 3.0) = 1.2;
-
-// Liquid glass
-uniform float blur_amount : hint_range(0.0, 8.0) = 3.0;
-uniform float warp_intensity : hint_range(0.0, 1.0) = 0.3;
-uniform float warp_strength : hint_range(0.0, 30.0) = 12.0;
-uniform float chromatic_strength : hint_range(0.0, 5.0) = 2.5;
-uniform float rim_intensity : hint_range(0.0, 1.0) = 0.35;
-uniform float sheen_intensity : hint_range(0.0, 0.5) = 0.08;
-uniform float sheen_falloff : hint_range(0.2, 0.8) = 0.4;
-uniform vec4 glass_tint : source_color = vec4(0.03, 0.03, 0.08, 0.7);
-uniform vec4 rim_color : source_color = vec4(1.0, 1.0, 1.0, 0.2);
+// Liquid glass (pixels unless noted)
+uniform float blur_px : hint_range(0.0, 12.0) = 3.0;        // extra shader blur on top of baked blur
+uniform float warp_band_px : hint_range(0.0, 300.0) = 80.0; // how far the edge lens reaches inward
+uniform float warp_px : hint_range(0.0, 80.0) = 30.0;       // max refraction displacement at edge
+uniform float chroma_px : hint_range(0.0, 20.0) = 6.0;      // chromatic aberration at edge
+uniform float rim_width_px : hint_range(0.5, 10.0) = 2.5;
+uniform float rim_intensity : hint_range(0.0, 2.0) = 0.9;
+uniform float sheen_intensity : hint_range(0.0, 0.5) = 0.10;
+uniform float sheen_falloff : hint_range(0.1, 1.0) = 0.35;
+uniform vec4 glass_tint : source_color = vec4(0.05, 0.06, 0.12, 0.22);
+uniform vec4 rim_color : source_color = vec4(1.0, 1.0, 1.0, 0.55);
 
 // Piece colors
 uniform vec4 color_1 : source_color = vec4(0.0, 0.88, 0.88, 1.0);
@@ -40,7 +46,7 @@ uniform vec4 color_7 : source_color = vec4(1.0, 0.55, 0.0, 1.0);
 uniform vec4 flash_rows = vec4(-1.0);
 uniform float flash_intensity : hint_range(0.0, 1.0) = 0.0;
 
-// ── Squircle SDF ──
+// Squircle SDF (p, half-size, radius — all in pixels)
 float board_sdf(vec2 p, vec2 b, float r) {
 	vec2 q = abs(p) - b + r;
 	float d = min(max(q.x, q.y), 0.0);
@@ -61,58 +67,51 @@ vec4 get_color(float type) {
 }
 
 void fragment() {
-	// Board SDF
-	vec2 half_size = vec2(0.5);
-	float r = corner_radius;
-	float sdf = board_sdf(UV - 0.5, half_size, r);
-	float board_alpha = 1.0 - smoothstep(-edge_smoothness, edge_smoothness, sdf);
+	// ── Shape (pixel space, origin at rect center) ──
+	vec2 px = (UV - 0.5) * rect_size;
+	float sdf = board_sdf(px, rect_size * 0.5, corner_radius_px);
 
-	if (board_alpha < 0.001)
+	// 1.5px anti-aliased edge
+	float board_alpha = 1.0 - smoothstep(-0.75, 0.75, sdf);
+	if (board_alpha < 0.004)
 		discard;
 
-	// Edge proximity (0=center, 1=edge)
-	float w = clamp(-sdf / 0.3, 0.0, 1.0);
+	// Edge proximity: 0 deep inside, 1 at the edge (within warp_band_px)
+	float edge = clamp(1.0 + sdf / warp_band_px, 0.0, 1.0);
+	// Cubic ramp = lens that bulges near the border, flat in the middle
+	float lens = edge * edge * edge;
 
-	// ── Refraction warp (radial edge bulge, same as liquid glass buttons) ──
-	vec2 uv_dir = length(UV - 0.5) > 0.001 ? normalize(UV - 0.5) : vec2(0.0, 1.0);
-	float warp_falloff = exp(-warp_strength * pow(w, 2.0));
-	vec2 warp_offset = uv_dir * warp_falloff * warp_intensity * 0.01;
-	vec2 warped_uv = SCREEN_UV - warp_offset;
+	vec2 dir = length(px) > 0.5 ? normalize(px) : vec2(0.0, 1.0);
 
-	// ── Manual multi-sample blur (ViewportTexture has no mipmaps) ──
-	float blur_px = blur_amount * 2.0;
-	vec2 blur_step = SCREEN_PIXEL_SIZE * blur_px;
+	// ── Refraction: displace the background sample inward near edges ──
+	vec2 base_uv = SCREEN_UV - dir * lens * warp_px * SCREEN_PIXEL_SIZE;
+
+	// ── Frosted blur (9 taps; bg_tex is already pre-blurred) ──
+	// Chromatic aberration grows toward the edge with the lens.
+	vec2 chroma = dir * (0.3 + lens) * chroma_px * SCREEN_PIXEL_SIZE;
 	vec3 bg = vec3(0.0);
-	float total_weight = 0.0;
-
-	// 9-tap box blur with chromatic aberration at edges
-	float ca = w * chromatic_strength;
 	for (int x = -1; x <= 1; x++) {
 		for (int y = -1; y <= 1; y++) {
-			vec2 offset = vec2(float(x), float(y)) * blur_step;
-			float weight = 1.0; // box blur
-			vec2 sample_uv = warped_uv + offset;
-			vec2 chroma = uv_dir * ca * SCREEN_PIXEL_SIZE;
-			bg.r += texture(bg_tex, sample_uv - chroma).r * weight;
-			bg.g += texture(bg_tex, sample_uv).g * weight;
-			bg.b += texture(bg_tex, sample_uv + chroma).b * weight;
-			total_weight += weight;
+			vec2 o = vec2(float(x), float(y)) * blur_px * SCREEN_PIXEL_SIZE;
+			bg.r += texture(bg_tex, base_uv + o - chroma).r;
+			bg.g += texture(bg_tex, base_uv + o).g;
+			bg.b += texture(bg_tex, base_uv + o + chroma).b;
 		}
 	}
-	bg /= total_weight;
+	bg /= 9.0;
 
-	// Tint
+	// ── Glass tint (light, so the background stays visible) ──
 	vec3 color = mix(bg, glass_tint.rgb, glass_tint.a);
 
-	// ── Rim light ──
-	float rim = smoothstep(0.0, 0.06, w) * rim_intensity;
-	color = mix(color, rim_color.rgb, rim * rim_color.a);
+	// ── Rim light: bright hairline just inside the edge ──
+	float rim = 1.0 - smoothstep(0.0, rim_width_px, -sdf);
+	color += rim_color.rgb * rim * rim_color.a * rim_intensity;
 
 	// ── Top sheen ──
-	float sheen = smoothstep(sheen_falloff, 0.0, UV.y) * sheen_intensity * (1.0 - w * 0.5);
+	float sheen = smoothstep(sheen_falloff, 0.0, UV.y) * sheen_intensity;
 	color += vec3(sheen);
 
-	// ── Cell rendering on top ──
+	// ── Cells on top of the glass ──
 	vec2 grid_pos = UV * cell_count;
 	vec2 cell_coord = floor(grid_pos);
 	vec2 local_uv = fract(grid_pos);
@@ -126,11 +125,11 @@ void fragment() {
 		              local_uv.y < pad_min.y || local_uv.y > pad_max.y;
 
 		if (in_pad) {
-			// Grid line — slightly darker
-			color *= 0.75;
+			// Grid line — slightly darker glass
+			color *= 0.82;
 		} else {
-			float tex_u = cell_coord.x / 10.0;
-			float tex_v = (cell_coord.y + vanish_offset) / 22.0;
+			float tex_u = (cell_coord.x + 0.5) / 10.0;
+			float tex_v = (cell_coord.y + vanish_offset + 0.5) / 22.0;
 			float piece_type = texture(board_tex, vec2(tex_u, tex_v)).r;
 
 			vec4 cc = get_color(piece_type);
@@ -152,5 +151,5 @@ void fragment() {
 		}
 	}
 
-	COLOR = vec4(color, 1.0);
+	COLOR = vec4(color, board_alpha);
 }
