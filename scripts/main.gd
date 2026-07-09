@@ -296,7 +296,6 @@ func _create_board_node() -> void:
 
 	# Pass ViewportTexture to board shader
 	var vp_tex := bg_viewport.get_texture()
-	_bg_vp_tex = vp_tex
 	_board_material.set_shader_parameter("bg_tex", vp_tex)
 
 	# Glass uniforms
@@ -672,10 +671,10 @@ func _position_all_nodes() -> void:
 
 	# SubViewport resize
 	if _bg_viewport:
-		_bg_viewport.size = vp.size
-		var bg_copy := _bg_viewport.get_child(0) if _bg_viewport.get_child_count() > 0 else null
-		if bg_copy:
-			bg_copy.size = vp.size
+		var svp_size := get_viewport_rect().size
+		_bg_viewport.size = svp_size
+		if _bg_viewport.get_child_count() > 0:
+			_bg_viewport.get_child(0).size = svp_size
 
 	# Background fallback
 	if _bg_fallback_rect:
