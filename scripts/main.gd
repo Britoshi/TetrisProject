@@ -55,6 +55,49 @@ var _bg_layer: CanvasLayer = null
 var _bg_rect: TextureRect = null
 var _bg_ok: bool = false
 
+# ── Shader rendering nodes ──
+# Board (data texture + shader)
+var _board_rect: ColorRect = null
+var _board_material: ShaderMaterial = null
+var _board_image: Image = null
+var _board_texture: ImageTexture = null
+const BOARD_TEX_W: int = 10
+const BOARD_TEX_H: int = 22
+
+# Active piece (4 pooled cells)
+var _piece_container: Node2D = null
+var _piece_cells: Array[ColorRect] = []
+var _piece_materials: Array[ShaderMaterial] = []
+
+# Ghost piece (4 pooled cells)
+var _ghost_container: Node2D = null
+var _ghost_cells: Array[ColorRect] = []
+var _ghost_materials: Array[ShaderMaterial] = []
+
+# HUD Labels
+var _score_label: Label = null
+var _lines_label: Label = null
+var _time_label: Label = null
+var _level_label: Label = null
+var _hold_title_label: Label = null
+var _next_title_label: Label = null
+
+# Hold preview (4 pooled cells)
+var _hold_container: Node2D = null
+var _hold_cells: Array[ColorRect] = []
+var _hold_materials: Array[ShaderMaterial] = []
+
+# Next preview (3 pieces x 4 cells each)
+var _next_container: Node2D = null
+var _next_sub_containers: Array[Node2D] = []
+var _next_cells: Array = []
+var _next_materials: Array = []
+
+# Background fallback
+var _bg_fallback_rect: ColorRect = null
+
+# Piece shader resource (shared by all piece cells)
+var _piece_shader: Shader = null
 
 # ── Init ──
 
@@ -77,8 +120,8 @@ func _ready() -> void:
 	print("  controller created")
 	_load_sprint_records()
 	_setup_background()
+	_create_render_nodes()
 	print("=== _ready() done — state: SPRINT_MENU ===")
-
 
 func _setup_input_actions() -> void:
 	# Only set up once
@@ -124,7 +167,6 @@ func _create_input_event(action: String, keycode: int) -> void:
 	ev.keycode = keycode
 	InputMap.action_add_event(action, ev)
 
-
 func _input(event: InputEvent) -> void:
 	match state:
 		State.SPRINT_MENU:
@@ -142,7 +184,6 @@ func _input(event: InputEvent) -> void:
 			if (event is InputEventKey and event.pressed) or (event is InputEventScreenTouch and event.pressed):
 				_restart()
 
-
 func _update_layout() -> void:
 	var vp_size := get_viewport_rect().size
 	if vp_size.x <= 0:
@@ -153,7 +194,7 @@ func _update_layout() -> void:
 	_board_y = layout.board_y
 	_font_scale = layout.font_scale
 	_fit_background()
-
+	_position_all_nodes()
 
 # ── Background image ──
 
@@ -178,7 +219,6 @@ func _setup_background() -> void:
 	else:
 		push_warning("Background image not found, using dark fill fallback")
 
-
 func _fit_background() -> void:
 	if not _bg_ok or _bg_rect == null:
 		return
@@ -186,6 +226,383 @@ func _fit_background() -> void:
 	_bg_rect.position = Vector2.ZERO
 	_bg_rect.size = vp.size
 
+# ═══════════════════════════════════════════════════════════
+# ── Shader rendering node creation ──
+# ═══════════════════════════════════════════════════════════
+
+func _create_render_nodes() -> void:
+	# Pre-load piece shader (shared by all piece/ghost/hold/next cells)
+	_piece_shader = load("res://shaders/piece.gdshader") as Shader
+
+	_create_board_node()
+	_create_piece_cells()
+	_create_ghost_cells()
+	_create_hud_labels()
+	_create_hold_preview()
+	_create_next_preview()
+	_create_bg_fallback()
+	_position_all_nodes()
+	_update_board_texture()
+
+func _make_piece_cell(color: Color, alpha: float, glow: float, size: float = -1.0) -> ColorRect:
+	"""Create a single ColorRect with piece.gdshader material."""
+	var cr := ColorRect.new()
+	cr.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	if size > 0:
+		cr.size = Vector2(size, size)
+	var mat := ShaderMaterial.new()
+	mat.shader = _piece_shader
+	mat.set_shader_parameter("fill_color", color)
+	mat.set_shader_parameter("alpha", alpha)
+	mat.set_shader_parameter("glow_intensity", glow)
+	mat.set_shader_parameter("cell_radius", 0.18)
+	cr.material = mat
+	return cr
+
+func _create_board_node() -> void:
+	var shader_res := load("res://shaders/board.gdshader") as Shader
+	if shader_res == null:
+		push_error("Failed to load board shader")
+		return
+
+	_board_material = ShaderMaterial.new()
+	_board_material.shader = shader_res
+
+	# Colors from Constants.COLORS
+	var c := Constants.COLORS
+	_board_material.set_shader_parameter("color_empty", Color(0.05, 0.05, 0.08, 1.0))
+	_board_material.set_shader_parameter("color_1", c[Constants.PieceType.I])
+	_board_material.set_shader_parameter("color_2", c[Constants.PieceType.O])
+	_board_material.set_shader_parameter("color_3", c[Constants.PieceType.T])
+	_board_material.set_shader_parameter("color_4", c[Constants.PieceType.S])
+	_board_material.set_shader_parameter("color_5", c[Constants.PieceType.Z])
+	_board_material.set_shader_parameter("color_6", c[Constants.PieceType.J])
+	_board_material.set_shader_parameter("color_7", c[Constants.PieceType.L])
+	_board_material.set_shader_parameter("grid_color", Color(0.02, 0.02, 0.04, 1.0))
+	_board_material.set_shader_parameter("flash_rows", Vector4(-1.0, -1.0, -1.0, -1.0))
+
+	# Data texture (10x22, FORMAT_RF = 32-bit float per pixel)
+	_board_image = Image.create(BOARD_TEX_W, BOARD_TEX_H, false, Image.FORMAT_RF)
+	_board_image.fill(Color(0, 0, 0, 1))  # all empty
+	_board_texture = ImageTexture.create_from_image(_board_image)
+	_board_material.set_shader_parameter("board_tex", _board_texture)
+
+	_board_rect = ColorRect.new()
+	_board_rect.name = "BoardRect"
+	_board_rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_board_rect.material = _board_material
+	add_child(_board_rect)
+
+func _create_piece_cells() -> void:
+	_piece_container = Node2D.new()
+	_piece_container.name = "PieceContainer"
+	add_child(_piece_container)
+
+	for i in range(4):
+		var cr := _make_piece_cell(Color.WHITE, 1.0, 0.4)
+		_piece_container.add_child(cr)
+		_piece_cells.append(cr)
+		_piece_materials.append(cr.material as ShaderMaterial)
+
+func _create_ghost_cells() -> void:
+	_ghost_container = Node2D.new()
+	_ghost_container.name = "GhostContainer"
+	add_child(_ghost_container)
+
+	for i in range(4):
+		var cr := _make_piece_cell(Color.WHITE, 0.25, 0.15)
+		_ghost_container.add_child(cr)
+		_ghost_cells.append(cr)
+		_ghost_materials.append(cr.material as ShaderMaterial)
+
+func _create_hud_labels() -> void:
+	var font := ThemeDB.fallback_font
+	_score_label = Label.new()
+	_score_label.name = "ScoreLabel"
+	_score_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_score_label.add_theme_color_override("font_color", Color.WHITE)
+	add_child(_score_label)
+
+	_lines_label = Label.new()
+	_lines_label.name = "LinesLabel"
+	_lines_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_lines_label.add_theme_color_override("font_color", Color.WHITE)
+	add_child(_lines_label)
+
+	_level_label = Label.new()
+	_level_label.name = "LevelLabel"
+	_level_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_level_label.add_theme_color_override("font_color", Color.WHITE)
+	add_child(_level_label)
+
+	_time_label = Label.new()
+	_time_label.name = "TimeLabel"
+	_time_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_time_label.add_theme_color_override("font_color", Color.WHITE)
+	add_child(_time_label)
+
+	_hold_title_label = Label.new()
+	_hold_title_label.name = "HoldTitleLabel"
+	_hold_title_label.text = "Hold"
+	_hold_title_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_hold_title_label.add_theme_color_override("font_color", Color.WHITE)
+	add_child(_hold_title_label)
+
+	_next_title_label = Label.new()
+	_next_title_label.name = "NextTitleLabel"
+	_next_title_label.text = "Next:"
+	_next_title_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_next_title_label.add_theme_color_override("font_color", Color.WHITE)
+	add_child(_next_title_label)
+
+func _create_hold_preview() -> void:
+	_hold_container = Node2D.new()
+	_hold_container.name = "HoldPreview"
+	add_child(_hold_container)
+	for i in range(4):
+		var cr := _make_piece_cell(Color.GRAY, 1.0, 0.2, 0)
+		_hold_container.add_child(cr)
+		_hold_cells.append(cr)
+		_hold_materials.append(cr.material as ShaderMaterial)
+
+func _create_next_preview() -> void:
+	_next_container = Node2D.new()
+	_next_container.name = "NextPreview"
+	add_child(_next_container)
+	for i in range(3):
+		var sub := Node2D.new()
+		sub.name = "NextPiece%d" % i
+		_next_container.add_child(sub)
+		_next_sub_containers.append(sub)
+		var cells: Array[ColorRect] = []
+		var mats: Array[ShaderMaterial] = []
+		for j in range(4):
+			var cr := _make_piece_cell(Color.GRAY, 1.0, 0.2, 0)
+			sub.add_child(cr)
+			cells.append(cr)
+			mats.append(cr.material as ShaderMaterial)
+		_next_cells.append(cells)
+		_next_materials.append(mats)
+
+func _create_bg_fallback() -> void:
+	_bg_fallback_rect = ColorRect.new()
+	_bg_fallback_rect.name = "BgFallback"
+	_bg_fallback_rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_bg_fallback_rect.visible = not _bg_ok
+	# Show behind everything
+	_bg_fallback_rect.z_index = -10
+	var shader_res := load("res://shaders/background.gdshader") as Shader
+	if shader_res:
+		var mat := ShaderMaterial.new()
+		mat.shader = shader_res
+		_bg_fallback_rect.material = mat
+	else:
+		_bg_fallback_rect.color = Color(0.1, 0.1, 0.15)
+	add_child(_bg_fallback_rect)
+
+# ═══════════════════════════════════════════════════════════
+# ── Shader rendering updates ──
+# ═══════════════════════════════════════════════════════════
+
+func _update_board_texture() -> void:
+	"""Copy board.grid → 10×22 ImageTexture. Call after lock/clear/reset."""
+	if _board_image == null or board == null:
+		return
+	for r in range(Constants.ROWS):
+		for c in range(Constants.COLS):
+			var val: float = float(board.get_cell(c, r))
+			_board_image.set_pixel(c, r, Color(val, 0, 0, 1))
+	_board_texture.update(_board_image)
+
+func _update_piece_positions() -> void:
+	"""Position active piece cells each frame."""
+	if state != State.PLAYING or controller.is_locked:
+		_piece_container.visible = false
+		return
+
+	var cs: int = _cell_size
+	var bx: int = _board_x
+	var by: int = _board_y
+	var cells := controller.get_absolute_cells()
+	var color := Constants.COLORS.get(controller.piece_type, Color.GRAY)
+
+	_piece_container.visible = true
+	var idx := 0
+	for cell in cells:
+		if idx >= _piece_cells.size():
+			break
+		if cell.y >= 2:
+			_piece_cells[idx].position = Vector2(bx + cell.x * cs, by + (cell.y - 2) * cs)
+			_piece_cells[idx].size = Vector2(cs, cs)
+			_piece_materials[idx].set_shader_parameter("fill_color", color)
+			_piece_cells[idx].visible = true
+		else:
+			_piece_cells[idx].visible = false
+		idx += 1
+
+func _update_ghost_positions() -> void:
+	"""Position ghost piece cells each frame."""
+	if state != State.PLAYING or controller.is_locked:
+		_ghost_container.visible = false
+		return
+
+	var cs: int = _cell_size
+	var bx: int = _board_x
+	var by: int = _board_y
+	var ghost_y: int = controller.get_ghost_y()
+	var ghost_pos := Vector2i(controller.position.x, ghost_y)
+	var cells := controller.get_cells_at(ghost_pos, controller.rotation)
+	var color := Constants.COLORS.get(controller.piece_type, Color.GRAY)
+
+	_ghost_container.visible = true
+	var idx := 0
+	for cell in cells:
+		if idx >= _ghost_cells.size():
+			break
+		if cell.y >= 2:
+			_ghost_cells[idx].position = Vector2(bx + cell.x * cs, by + (cell.y - 2) * cs)
+			_ghost_cells[idx].size = Vector2(cs, cs)
+			_ghost_materials[idx].set_shader_parameter("fill_color", color)
+			_ghost_cells[idx].visible = true
+		else:
+			_ghost_cells[idx].visible = false
+		idx += 1
+
+func _update_hud() -> void:
+	"""Update HUD label text. Called each frame during gameplay."""
+	_score_label.text = "Score: %d" % score
+	_level_label.text = "Level: %d" % level
+
+	if sprint_target > 0:
+		_lines_label.text = "Lines: %d/%d" % [lines_cleared, sprint_target]
+	else:
+		_lines_label.text = "Lines: %d" % lines_cleared
+
+	if sprint_target > 0:
+		_time_label.text = "Time: %s" % _format_time(sprint_time)
+		_time_label.visible = true
+	else:
+		_time_label.visible = false
+
+func _update_hold_preview() -> void:
+	"""Update hold piece display. Call when hold piece changes."""
+	if _held_piece_type == Constants.PieceType.EMPTY:
+		for i in range(_hold_cells.size()):
+			_hold_cells[i].visible = false
+		return
+
+	var preview_cs: int = maxi(4, _cell_size / 2)
+	var offsets := piece_data.CELLS[_held_piece_type][0]
+	var color := Constants.COLORS.get(_held_piece_type, Color.GRAY)
+
+	for i in range(4):
+		if i >= _hold_cells.size():
+			break
+		var off: Vector2i = offsets[i]
+		_hold_cells[i].position = Vector2(off.x * preview_cs, off.y * preview_cs)
+		_hold_cells[i].size = Vector2(preview_cs, preview_cs)
+		var alpha: float = 0.35 if _hold_locked else 1.0
+		_hold_materials[i].set_shader_parameter("fill_color", color)
+		_hold_materials[i].set_shader_parameter("alpha", alpha)
+		_hold_cells[i].visible = true
+
+func _update_next_preview() -> void:
+	"""Update next-piece preview display. Call when bag advances or on reset."""
+	if state == State.GAME_OVER or state == State.SPRINT_COMPLETE:
+		for sub in _next_sub_containers:
+			sub.visible = false
+		return
+
+	var preview_cs: int = maxi(4, _cell_size / 2)
+	var next_pieces := bag.peek_next(3)
+
+	for i in range(3):
+		_next_sub_containers[i].visible = true
+		var p_type: int = next_pieces[i]
+		var color := Constants.COLORS.get(p_type, Color.GRAY)
+		var offsets := piece_data.CELLS[p_type][0]
+		for j in range(4):
+			if j >= _next_cells[i].size():
+				break
+			var off: Vector2i = offsets[j]
+			_next_cells[i][j].position = Vector2(off.x * preview_cs, off.y * preview_cs)
+			_next_cells[i][j].size = Vector2(preview_cs, preview_cs)
+			_next_materials[i][j].set_shader_parameter("fill_color", color)
+			_next_materials[i][j].set_shader_parameter("alpha", 1.0)
+			_next_cells[i][j].visible = true
+
+func _set_flash_rows(rows: Array, intensity: float) -> void:
+	"""Set line clear flash uniforms on the board shader."""
+	if _board_material == null:
+		return
+	var r := Vector4(-1.0, -1.0, -1.0, -1.0)
+	for i in range(mini(rows.size(), 4)):
+		# Convert grid row to visible row (row - 2)
+		r[i] = float(rows[i] - 2)
+	_board_material.set_shader_parameter("flash_rows", r)
+	_board_material.set_shader_parameter("flash_intensity", intensity)
+
+func _position_all_nodes() -> void:
+	var cs: int = _cell_size
+	var bx: float = _board_x
+	var by: float = _board_y
+	var board_w: float = Constants.COLS * cs
+	var board_h: float = Constants.VISIBLE_ROWS * cs
+	var margin: float = maxf(4, cs / 4.0)
+	var font_s: int = int(14 * _font_scale)
+	var font_m: int = int(16 * _font_scale)
+
+	# Board
+	if _board_rect:
+		_board_rect.position = Vector2(bx, by)
+		_board_rect.size = Vector2(board_w, board_h)
+
+	# HUD labels (right side)
+	var right_x: float = bx + board_w + margin
+	var line_h: float = font_m + 8
+	var score_y: float = by + cs + font_m
+
+	if _score_label:
+		_score_label.position = Vector2(right_x, score_y)
+		_score_label.add_theme_font_size_override("font_size", font_m)
+	if _lines_label:
+		_lines_label.position = Vector2(right_x, score_y + line_h)
+		_lines_label.add_theme_font_size_override("font_size", font_m)
+	if _level_label:
+		_level_label.position = Vector2(right_x, score_y + line_h * 2)
+		_level_label.add_theme_font_size_override("font_size", font_m)
+	if _time_label:
+		_time_label.position = Vector2(right_x, score_y + line_h * 3)
+		_time_label.add_theme_font_size_override("font_size", font_m)
+
+	# Hold (left side)
+	var hold_x: float = bx - cs * 2 - margin
+	if hold_x < 0:
+		hold_x = margin
+	if _hold_title_label:
+		_hold_title_label.position = Vector2(hold_x, by + cs + font_s)
+		_hold_title_label.add_theme_font_size_override("font_size", font_s)
+	if _hold_container:
+		_hold_container.position = Vector2(hold_x, by + cs + font_s + font_m + margin)
+
+	# Next (right side, below score)
+	var next_y: float = score_y + line_h * 3 + margin
+	if sprint_target > 0:
+		next_y += line_h
+	if _next_title_label:
+		_next_title_label.position = Vector2(right_x, next_y)
+		_next_title_label.add_theme_font_size_override("font_size", font_s)
+	if _next_container:
+		_next_container.position = Vector2(right_x, next_y + font_s + margin)
+		var preview_spacing: float = cs * 3
+		for i in range(_next_sub_containers.size()):
+			_next_sub_containers[i].position = Vector2(0, i * preview_spacing)
+
+	# Background fallback
+	if _bg_fallback_rect:
+		var vp := get_viewport_rect()
+		_bg_fallback_rect.position = Vector2.ZERO
+		_bg_fallback_rect.size = vp.size
 
 # ── Spawning ──
 
@@ -202,8 +619,8 @@ func _spawn_next_piece() -> void:
 		controller.lock_resets = 0
 		_hold_used_this_drop = false
 		_hold_locked = false
+		_update_next_preview()
 		print("  spawn ok — cells:", controller.get_absolute_cells())
-
 
 # ── Main loop ──
 
@@ -236,8 +653,15 @@ func _process(delta: float) -> void:
 		State.SPRINT_COMPLETE:
 			pass  # input handled via _input()
 
-	queue_redraw()
+	# ── Shader-based rendering updates (every frame) ──
+	if state != State.SPRINT_MENU and state != State.SPRINT_COMPLETE:
+		_update_piece_positions()
+		_update_ghost_positions()
+		_update_hud()
 
+	# Overlays (sprint menu, game over, sprint complete) still use _draw()
+	if state == State.SPRINT_MENU or state == State.GAME_OVER or state == State.SPRINT_COMPLETE:
+		queue_redraw()
 
 func _process_playing(delta: float) -> void:
 	# ── Sprint timer ──
@@ -313,19 +737,23 @@ func _process_playing(delta: float) -> void:
 	else:
 		controller.lock_timer = 0.0
 
-
 func _process_line_clear(delta: float) -> void:
 	line_clear_timer -= delta
+	# Flash animation: pulse intensity
+	var t: float = 1.0 - (line_clear_timer / 0.4)
+	var intensity: float = sin(t * PI)  # 0→1→0
+	_set_flash_rows(cleared_row_indices, intensity)
 	if line_clear_timer <= 0.0:
+		_set_flash_rows([], 0.0)
 		_do_clear_lines()
-		_spawn_next_piece()
-
+		# Only spawn if we didn't transition to sprint complete / game over
+		if state == State.LINE_CLEAR:
+			_spawn_next_piece()
 
 func _process_game_over(_delta: float) -> void:
 	# Hard drop or restart returns to sprint menu
 	if Input.is_action_just_pressed("tetris_hard_drop") or Input.is_action_just_pressed("tetris_restart"):
 		_restart()
-
 
 # ── Actions ──
 
@@ -333,11 +761,9 @@ func _try_move_left() -> void:
 	if controller.move_left():
 		_reset_lock_if_on_ground()
 
-
 func _try_move_right() -> void:
 	if controller.move_right():
 		_reset_lock_if_on_ground()
-
 
 func _try_soft_drop(delta: float) -> void:
 	gravity_acc += delta * (Constants.GRAVITY_SPEEDS[1] / Constants.SOFT_DROP_FACTOR - 1.0)
@@ -345,20 +771,17 @@ func _try_soft_drop(delta: float) -> void:
 		score += Constants.SCORE_SOFT_DROP
 		gravity_acc = 0.0
 
-
 func _try_rotate_cw() -> void:
 	if controller.rotate_cw():
 		_reset_lock_if_on_ground()
 		if controller.piece_type == Constants.PieceType.T:
 			board.last_move_was_rotation = true
 
-
 func _try_rotate_ccw() -> void:
 	if controller.rotate_ccw():
 		_reset_lock_if_on_ground()
 		if controller.piece_type == Constants.PieceType.T:
 			board.last_move_was_rotation = true
-
 
 
 func _try_hold() -> void:
@@ -369,29 +792,28 @@ func _try_hold() -> void:
 		# First hold — store current, spawn next
 		_held_piece_type = current_type
 		_hold_locked = true
+		_update_hold_preview()
 		_spawn_next_piece()
 	else:
 		# Swap held with current
 		var swap_type: int = _held_piece_type
 		_held_piece_type = current_type
 		_hold_locked = true
+		_update_hold_preview()
 		if not controller.spawn(swap_type):
 			state = State.GAME_OVER
 func _try_gravity() -> bool:
 	return controller.move_down()
-
 
 func _hard_drop() -> void:
 	var distance: int = controller.hard_drop()
 	score += distance * Constants.SCORE_HARD_DROP
 	_lock_piece()
 
-
 func _reset_lock_if_on_ground() -> void:
 	if controller.is_on_ground() and controller.lock_resets < Constants.MAX_LOCK_RESETS:
 		controller.lock_timer = 0.0
 		controller.lock_resets += 1
-
 
 func _lock_piece() -> void:
 	controller.is_locked = true
@@ -406,6 +828,7 @@ func _lock_piece() -> void:
 	# Write piece to board
 	board.lock_piece(cells, controller.piece_type)
 	board.last_move_was_rotation = false
+	_update_board_texture()
 
 	# Check game over (piece locked in vanish zone)
 	if board.is_game_over():
@@ -413,10 +836,12 @@ func _lock_piece() -> void:
 		print("GAME OVER — vanish zone breached")
 		return
 
-	# Line clear (instant — no pause)
+	# Line clear — pause for flash animation
 	cleared_row_indices = board.clear_lines()
 	if cleared_row_indices.size() > 0:
-		_score_lines(cleared_row_indices.size(), tspin)
+		line_clear_timer = 0.4
+		state = State.LINE_CLEAR
+		return  # _process_line_clear handles scoring + spawn
 
 	# Sprint completion check
 	if sprint_target > 0 and lines_cleared >= sprint_target:
@@ -425,10 +850,15 @@ func _lock_piece() -> void:
 
 	_spawn_next_piece()
 
-
 func _do_clear_lines() -> void:
-	pass
+	# Lines were already removed from grid in _lock_piece.
+	# Score them (no T-spin — that was already scored if applicable).
+	_score_lines(cleared_row_indices.size(), false)
+	_update_board_texture()
 
+	# Sprint completion check
+	if sprint_target > 0 and lines_cleared >= sprint_target:
+		_finish_sprint()
 
 func _restart() -> void:
 	_restart_game_only()
@@ -436,7 +866,6 @@ func _restart() -> void:
 	sprint_target = 0
 	sprint_time = 0.0
 	state = State.SPRINT_MENU
-
 
 func _restart_game_only() -> void:
 	"""Reset board/score/level but keep sprint target. Used by _start_sprint."""
@@ -450,8 +879,12 @@ func _restart_game_only() -> void:
 	das_left_acc = 0.0; das_left_active = false
 	das_right_acc = 0.0; das_right_active = false
 	_held_piece_type = Constants.PieceType.EMPTY
+	_hold_locked = false
+	_hold_used_this_drop = false
+	_update_board_texture()
+	_set_flash_rows([], 0.0)
+	_update_hold_preview()
 	_spawn_next_piece()
-
 
 func _start_sprint(target: int) -> void:
 	"""Begin a new sprint with the given line target."""
@@ -459,7 +892,6 @@ func _start_sprint(target: int) -> void:
 	sprint_time = 0.0
 	_sprint_new_record = false
 	_restart_game_only()
-
 
 func _finish_sprint() -> void:
 	"""Called when lines_cleared >= sprint_target. Checks/saves record."""
@@ -470,7 +902,6 @@ func _finish_sprint() -> void:
 		_save_sprint_records()
 	state = State.SPRINT_COMPLETE
 
-
 func _format_time(seconds: float) -> String:
 	if seconds < 60.0:
 		return "%.1fs" % seconds
@@ -478,7 +909,6 @@ func _format_time(seconds: float) -> String:
 	var secs := int(seconds) % 60
 	var tenths := int(fmod(seconds, 1.0) * 10)
 	return "%d:%02d.%d" % [mins, secs, tenths]
-
 
 func _score_lines(line_count: int, is_tspin: bool) -> void:
 	var base: int
@@ -496,11 +926,9 @@ func _score_lines(line_count: int, is_tspin: bool) -> void:
 		level = min(new_level, Constants.MAX_LEVEL)
 		print("Level up! %d" % level)
 
-
 func _get_gravity_interval() -> float:
 	var idx: int = min(level, Constants.GRAVITY_SPEEDS.size() - 1)
 	return Constants.GRAVITY_SPEEDS[idx]
-
 
 
 
@@ -514,7 +942,6 @@ func _load_sprint_records() -> void:
 		if val > 0.0:
 			sprint_records[target] = val
 
-
 func _save_sprint_records() -> void:
 	"""Persist all sprint records to config file."""
 	var cfg := ConfigFile.new()
@@ -527,152 +954,44 @@ var _draw_count: int = 0
 
 func _draw() -> void:
 	if board == null or controller == null:
-		return  # _ready() hasn't run yet
+		return
 	_draw_count += 1
-	if _draw_count == 1:
-		print("  FIRST _draw() CALLED — viewport:", get_viewport_rect())
-	if _draw_count == 2:
-		print("  second _draw() — still alive")
 
 	var cs: int = _cell_size
 	var bx: int = _board_x
 	var by: int = _board_y
-	var margin: int = maxi(4, cs / 4)
 	var font_s: int = int(14 * _font_scale)
 	var font_m: int = int(16 * _font_scale)
 	var font_l: int = int(24 * _font_scale)
-
-	# Full background fill — only when video isn't available
-	var vp_rect = get_viewport_rect()
-	if not _bg_ok:
-		draw_rect(Rect2(Vector2.ZERO, vp_rect.size), Color(0.1, 0.1, 0.15))
 
 	# Sprint menu — full-screen, skip all game rendering
 	if state == State.SPRINT_MENU:
 		_draw_sprint_menu(font_s, font_m, font_l)
 		return
 
-	# Board background
 	var board_width: int = Constants.COLS * cs
 	var board_height: int = Constants.VISIBLE_ROWS * cs
-	draw_rect(Rect2(bx, by, board_width, board_height), Color(0.05, 0.05, 0.08))
-	draw_rect(Rect2(bx - 1, by - 1, board_width + 2, board_height + 2), Color.WHITE, false, 2.0)
-
-	# Locked cells (visible rows only: rows 2 through 21)
-	for r in range(2, Constants.ROWS):
-		for c in range(Constants.COLS):
-			var cell_type: int = board.get_cell(c, r)
-			if cell_type != Constants.PieceType.EMPTY:
-				var color = Constants.COLORS.get(cell_type, Color.GRAY)
-				_draw_cell(c, r - 2, color, cs, bx, by)
-
-	# Ghost piece
-	if state == State.PLAYING and not controller.is_locked:
-		var ghost_y: int = controller.get_ghost_y()
-		var ghost_pos := Vector2i(controller.position.x, ghost_y)
-		var ghost_cells := controller.get_cells_at(ghost_pos, controller.rotation)
-		var ghost_color = Constants.COLORS.get(controller.piece_type, Color.GRAY)
-		ghost_color.a = 0.25
-		for cell in ghost_cells:
-			if cell.y >= 2:
-				_draw_cell(cell.x, cell.y - 2, ghost_color, cs, bx, by)
-
-	# Active piece
-	if state != State.GAME_OVER and not controller.is_locked:
-		var active_cells = controller.get_absolute_cells()
-		var active_color = Constants.COLORS.get(controller.piece_type, Color.GRAY)
-		for cell in active_cells:
-			if cell.y >= 2:
-				_draw_cell(cell.x, cell.y - 2, active_color, cs, bx, by)
-
-	# Line clear flash
-	if state == State.LINE_CLEAR:
-		for row_idx in cleared_row_indices:
-			var visible_row: int = row_idx - 2
-			if visible_row >= 0:
-				var flash_rect := Rect2(bx, by + visible_row * cs, board_width, cs)
-				draw_rect(flash_rect, Color.WHITE, false, 2.0)
-	var font = ThemeDB.fallback_font
 	var board_center_x: float = bx + board_width / 2.0
 	var board_center_y: float = by + board_height / 2.0
-	var right_x: int = bx + board_width + margin
-	var hold_x: int = bx - cs * 2 - margin
-	if hold_x < 0:
-		hold_x = margin
+	var font = ThemeDB.fallback_font
 
 	# Game over overlay
 	if state == State.GAME_OVER:
 		draw_rect(Rect2(bx - 2, by - 2, board_width + 4, board_height + 4), Color.RED, false, 3.0)
-		var go_text := "GAME OVER"
-		var go_size := font.get_string_size(go_text, HORIZONTAL_ALIGNMENT_CENTER, -1, font_l)
-		draw_string(font, Vector2(board_center_x, board_center_y - go_size.y - 4),
-			go_text, HORIZONTAL_ALIGNMENT_CENTER, -1, font_l, Color.RED)
-		var restart_text := "Tap ⬇ or R for Menu"
+		draw_string(font, Vector2(board_center_x, board_center_y - font_l - 4),
+			"GAME OVER", HORIZONTAL_ALIGNMENT_CENTER, -1, font_l, Color.RED)
 		draw_string(font, Vector2(board_center_x, board_center_y + 8),
-			restart_text, HORIZONTAL_ALIGNMENT_CENTER, -1, font_m, Color(1.0, 1.0, 1.0, 0.7))
-		# Sprint progress during game over
+			"Tap ⬇ or R for Menu", HORIZONTAL_ALIGNMENT_CENTER, -1, font_m, Color(1.0, 1.0, 1.0, 0.7))
 		if sprint_target > 0:
-			var prog_text := "Cleared %d/%d lines in %s" % [lines_cleared, sprint_target, _format_time(sprint_time)]
 			draw_string(font, Vector2(board_center_x, board_center_y + 8 + font_m + 6),
-				prog_text, HORIZONTAL_ALIGNMENT_CENTER, -1, font_s, Color(1.0, 1.0, 1.0, 0.5))
+				"Cleared %d/%d lines in %s" % [lines_cleared, sprint_target, _format_time(sprint_time)],
+				HORIZONTAL_ALIGNMENT_CENTER, -1, font_s, Color(1.0, 1.0, 1.0, 0.5))
+		return
 
 	# Sprint complete overlay
 	if state == State.SPRINT_COMPLETE:
 		_draw_sprint_complete(font, font_s, font_m, font_l, board_center_x, board_center_y, board_width)
 		return
-
-	# Score display (right side, below board top)
-	var score_y: float = by + cs + font_m
-	var line_h: float = font_m + 8
-	draw_string(font, Vector2(right_x, score_y),
-		"Score: %d" % score, HORIZONTAL_ALIGNMENT_LEFT, -1, font_m)
-	if sprint_target > 0:
-		draw_string(font, Vector2(right_x, score_y + line_h),
-			"Lines: %d/%d" % [lines_cleared, sprint_target], HORIZONTAL_ALIGNMENT_LEFT, -1, font_m)
-	else:
-		draw_string(font, Vector2(right_x, score_y + line_h),
-			"Lines: %d" % lines_cleared, HORIZONTAL_ALIGNMENT_LEFT, -1, font_m)
-	if sprint_target > 0:
-		draw_string(font, Vector2(right_x, score_y + line_h * 2),
-			"Time: %s" % _format_time(sprint_time), HORIZONTAL_ALIGNMENT_LEFT, -1, font_m)
-		draw_string(font, Vector2(right_x, score_y + line_h * 3),
-			"Level: %d" % level, HORIZONTAL_ALIGNMENT_LEFT, -1, font_m)
-	else:
-		draw_string(font, Vector2(right_x, score_y + line_h * 2),
-			"Level: %d" % level, HORIZONTAL_ALIGNMENT_LEFT, -1, font_m)
-
-	# Hold piece display (left side)
-	var hold_label := "Hold"
-	draw_string(font, Vector2(hold_x, by + cs + font_s),
-		hold_label, HORIZONTAL_ALIGNMENT_LEFT, -1, font_s)
-	if _held_piece_type != Constants.PieceType.EMPTY:
-		var hold_color = Constants.COLORS.get(_held_piece_type, Color.GRAY)
-		if _hold_locked:
-			hold_color.a = 0.35
-		var hold_offsets = piece_data.CELLS[_held_piece_type][0]
-		var hy: int = by + cs + font_s + font_m + margin
-		for off in hold_offsets:
-			var hpx: int = hold_x + off.x * (cs / 2)
-			draw_rect(Rect2(hpx, hy + off.y * (cs / 2), cs / 2, cs / 2), hold_color)
-			draw_rect(Rect2(hpx, hy + off.y * (cs / 2), cs / 2, cs / 2), Color.BLACK, false, 1.0)
-
-	# Next piece preview (right side, below score)
-	if state != State.GAME_OVER and state != State.SPRINT_COMPLETE:
-		var next_pieces = bag.peek_next(3)
-		var next_y: float = score_y + line_h * 3 + margin
-		if sprint_target > 0:
-			next_y += line_h  # extra line for timer
-		draw_string(font, Vector2(right_x, next_y),
-			"Next:", HORIZONTAL_ALIGNMENT_LEFT, -1, font_s)
-		for i in range(next_pieces.size()):
-			var preview_type: int = next_pieces[i]
-			var preview_color = Constants.COLORS.get(preview_type, Color.GRAY)
-			var preview_offsets = piece_data.CELLS[preview_type][0]
-			var py: int = next_y + font_s + margin + i * (cs * 3)
-			for off in preview_offsets:
-				var px: int = right_x + off.x * (cs / 2)
-				draw_rect(Rect2(px, py + off.y * (cs / 2), cs / 2, cs / 2), preview_color)
-				draw_rect(Rect2(px, py + off.y * (cs / 2), cs / 2, cs / 2), Color.BLACK, false, 1.0)
 func _draw_sprint_menu(font_s: int, font_m: int, font_l: int) -> void:
 	var font := ThemeDB.fallback_font
 	var vp_rect := get_viewport_rect()
@@ -729,7 +1048,6 @@ func _draw_sprint_menu(font_s: int, font_m: int, font_l: int) -> void:
 		"Mobile: tap a target above", HORIZONTAL_ALIGNMENT_CENTER, -1, int(12 * _font_scale),
 		Color(1.0, 1.0, 1.0, 0.35))
 
-
 func _draw_sprint_complete(font: Font, font_s: int, font_m: int, font_l: int,
 		board_center_x: float, board_center_y: float, board_width: float) -> void:
 	# Semi-transparent overlay over the board
@@ -770,11 +1088,3 @@ func _draw_sprint_complete(font: Font, font_s: int, font_m: int, font_l: int,
 		HORIZONTAL_ALIGNMENT_CENTER, -1, font_s, Color(1.0, 1.0, 1.0, 0.5))
 
 
-func _draw_cell(col: int, visible_row: int, color: Color, cell_size: int, board_x: int, board_y: int) -> void:
-	var rect := Rect2(
-		board_x + col * cell_size,
-		board_y + visible_row * cell_size,
-		cell_size, cell_size
-	)
-	draw_rect(rect, color)
-	draw_rect(rect, Color.BLACK, false, 1.0)
