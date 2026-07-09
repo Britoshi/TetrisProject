@@ -13,11 +13,13 @@ uniform float vanish_offset = 2.0;
 uniform float cell_padding : hint_range(0.0, 0.2) = 0.04;
 
 // Board shape (squircle SDF)
-uniform float corner_radius : hint_range(0.0, 0.5) = 0.06;
-uniform float edge_smoothness : hint_range(0.5, 3.0) = 1.0;
+uniform float corner_radius : hint_range(0.0, 0.5) = 0.08;
+uniform float edge_smoothness : hint_range(0.5, 3.0) = 1.2;
 
 // Liquid glass
 uniform float blur_amount : hint_range(0.0, 8.0) = 3.0;
+uniform float warp_intensity : hint_range(0.0, 1.0) = 0.3;
+uniform float warp_strength : hint_range(0.0, 30.0) = 12.0;
 uniform float chromatic_strength : hint_range(0.0, 5.0) = 2.5;
 uniform float rim_intensity : hint_range(0.0, 1.0) = 0.35;
 uniform float sheen_intensity : hint_range(0.0, 0.5) = 0.08;
@@ -71,14 +73,19 @@ void fragment() {
 	// Edge proximity (0=center, 1=edge)
 	float w = clamp(-sdf / 0.3, 0.0, 1.0);
 
-	// ── Screen-space blur with chromatic aberration ──
+	// ── Refraction warp (radial edge bulge, same as liquid glass buttons) ──
 	vec2 uv_dir = length(UV - 0.5) > 0.001 ? normalize(UV - 0.5) : vec2(0.0, 1.0);
+	float warp_falloff = exp(-warp_strength * pow(w, 2.0));
+	vec2 warp_offset = uv_dir * warp_falloff * warp_intensity * 0.01;
+	vec2 warped_uv = SCREEN_UV - warp_offset;
+
+	// ── Chromatic aberration at edges ──
 	float ca = w * chromatic_strength;
 	vec2 chroma_offset = uv_dir * ca * SCREEN_PIXEL_SIZE;
 
-	float bg_r = textureLod(screen_texture, SCREEN_UV - chroma_offset, blur_amount).r;
-	float bg_g = textureLod(screen_texture, SCREEN_UV, blur_amount).g;
-	float bg_b = textureLod(screen_texture, SCREEN_UV + chroma_offset, blur_amount).b;
+	float bg_r = textureLod(screen_texture, warped_uv - chroma_offset, blur_amount).r;
+	float bg_g = textureLod(screen_texture, warped_uv, blur_amount).g;
+	float bg_b = textureLod(screen_texture, warped_uv + chroma_offset, blur_amount).b;
 	vec3 bg = vec3(bg_r, bg_g, bg_b);
 
 	// Tint

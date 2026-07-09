@@ -270,10 +270,22 @@ func _create_board_node() -> void:
 	_board_material = ShaderMaterial.new()
 	_board_material.shader = shader_res
 
+	# Glass + shape uniforms
+	_board_material.set_shader_parameter("corner_radius", 0.08)
+	_board_material.set_shader_parameter("edge_smoothness", 1.2)
+	_board_material.set_shader_parameter("warp_intensity", 0.3)
+	_board_material.set_shader_parameter("warp_strength", 12.0)
+	_board_material.set_shader_parameter("blur_amount", 3.0)
+	_board_material.set_shader_parameter("chromatic_strength", 2.5)
+	_board_material.set_shader_parameter("rim_intensity", 0.35)
+	_board_material.set_shader_parameter("sheen_intensity", 0.08)
+	_board_material.set_shader_parameter("sheen_falloff", 0.4)
+	_board_material.set_shader_parameter("glass_tint", Color(0.03, 0.03, 0.08, 0.7))
+	_board_material.set_shader_parameter("rim_color", Color(1.0, 1.0, 1.0, 0.2))
+	_board_material.set_shader_parameter("grid_color", Color(0.0, 0.0, 0.0, 0.25))
+
 	# Colors from Constants.COLORS
 	var c := Constants.COLORS
-	_board_material.set_shader_parameter("glass_color", Color(0.02, 0.02, 0.06, 0.65))
-	_board_material.set_shader_parameter("grid_color", Color(0.0, 0.0, 0.0, 0.25))
 	_board_material.set_shader_parameter("color_1", c[Constants.PieceType.I])
 	_board_material.set_shader_parameter("color_2", c[Constants.PieceType.O])
 	_board_material.set_shader_parameter("color_3", c[Constants.PieceType.T])
