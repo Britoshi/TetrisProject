@@ -514,12 +514,12 @@ func _update_next_preview() -> void:
 		return
 
 	var preview_cs: int = maxi(4, _cell_size / 2)
-	var next_pieces: Array = bag.peek_next(3)
+	var next_pieces: Array[int] = bag.peek_next(3)
 
 	for i in range(3):
 		_next_sub_containers[i].visible = true
 		var p_type: int = next_pieces[i]
-		var color := Constants.COLORS.get(p_type, Color.GRAY)
+		var color: Color = Constants.COLORS.get(p_type, Color.GRAY) as Color
 		var offsets: Array[Vector2i] = piece_data.CELLS[p_type][0] as Array[Vector2i]
 		for j in range(4):
 			if j >= _next_cells[i].size():
