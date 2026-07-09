@@ -273,9 +273,10 @@ func _bake_board_bg() -> void:
 		var oy := int((ih - crop_h) / 2.0)
 		img = img.get_region(Rect2i(ox, oy, crop_w, crop_h))
 
-	# Blur = decimate hard, then smooth back up. At ~1/12 screen height each
-	# texel covers ~12px of screen; the cubic upscale removes bilinear facets.
-	var small_h := 96
+	# Blur = decimate hard, then smooth back up. At ~1/9 screen height each
+	# texel covers ~9px of screen; the cubic upscale removes bilinear facets.
+	# Kept light enough that the rim refraction has structure to bend.
+	var small_h := 120
 	var small_w := maxi(2, int(round(small_h * vp_size.x / vp_size.y)))
 	img.resize(small_w, small_h, Image.INTERPOLATE_LANCZOS)
 	img.resize(small_w * 3, small_h * 3, Image.INTERPOLATE_CUBIC)
@@ -334,17 +335,18 @@ func _create_board_node() -> void:
 	# ── Pre-blurred background for the glass (baked on CPU, renderer-proof) ──
 	_bake_board_bg()
 
-	# Glass uniforms (all in pixels — the shader works in pixel space)
-	_board_material.set_shader_parameter("blur_px", 3.0)
-	_board_material.set_shader_parameter("warp_band_px", 80.0)
-	_board_material.set_shader_parameter("warp_px", 30.0)
-	_board_material.set_shader_parameter("chroma_px", 6.0)
-	_board_material.set_shader_parameter("rim_width_px", 2.5)
-	_board_material.set_shader_parameter("rim_intensity", 0.9)
-	_board_material.set_shader_parameter("sheen_intensity", 0.10)
+	# Glass optics (pixel-space; bevel/thickness set per-layout in _position_all_nodes)
+	_board_material.set_shader_parameter("blur_px", 2.5)
+	_board_material.set_shader_parameter("ior", 1.45)
+	_board_material.set_shader_parameter("dispersion", 0.03)
+	_board_material.set_shader_parameter("saturation", 1.35)
+	_board_material.set_shader_parameter("brightness", 1.06)
+	_board_material.set_shader_parameter("spec_intensity", 1.0)
+	_board_material.set_shader_parameter("rim_width_px", 2.0)
+	_board_material.set_shader_parameter("sheen_intensity", 0.05)
 	_board_material.set_shader_parameter("sheen_falloff", 0.35)
-	_board_material.set_shader_parameter("glass_tint", Color(0.05, 0.06, 0.12, 0.22))
-	_board_material.set_shader_parameter("rim_color", Color(1.0, 1.0, 1.0, 0.55))
+	_board_material.set_shader_parameter("glass_tint", Color(0.06, 0.08, 0.14, 0.15))
+	_board_material.set_shader_parameter("rim_color", Color(1.0, 1.0, 1.0, 0.8))
 
 	# Colors from Constants.COLORS
 	var c := Constants.COLORS
@@ -700,7 +702,9 @@ func _position_all_nodes() -> void:
 	# Board shader geometry + re-bake blurred bg if the screen size changed
 	if _board_material:
 		_board_material.set_shader_parameter("rect_size", Vector2(board_w, board_h))
-		_board_material.set_shader_parameter("corner_radius_px", cs * 0.6)
+		_board_material.set_shader_parameter("corner_radius_px", cs * 0.8)
+		_board_material.set_shader_parameter("bevel_px", cs * 1.1)
+		_board_material.set_shader_parameter("thickness_px", cs * 1.6)
 		if _bg_bake_size != get_viewport_rect().size:
 			_bake_board_bg()
 

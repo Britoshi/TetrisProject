@@ -1,37 +1,45 @@
 shader_type canvas_item;
 
-// board.gdshader — Liquid glass board panel.
-// All distances are computed in PIXELS (rect_size uniform), not UV,
-// so tuning values mean what they say on any screen size.
+// board.gdshader — Liquid glass board panel (physically-flavored).
 //
+// The board is modeled as a thick glass slab with a circular beveled rim.
+// Per-fragment we build the slab's surface normal from the squircle SDF
+// gradient, then refract the view ray through it (Snell, IOR ~1.45) with
+// per-channel dispersion. The refracted ray is projected onto the
+// background plane, so the rim genuinely bends and magnifies what's
+// behind it — the signature Liquid Glass rolled edge. Speculars come
+// from a top-left key light and a weaker bottom-right counter glint.
+//
+// All distances are in PIXELS (rect_size uniform).
 // bg_tex is a pre-blurred, cover-fitted copy of the screen background
-// baked on the CPU (see main.gd _bake_board_bg). It is sampled at
-// SCREEN_UV, so it lines up 1:1 with the real background behind the
-// board. No screen capture / SubViewport needed.
+// baked on the CPU (main.gd _bake_board_bg), sampled at SCREEN_UV.
 
 uniform sampler2D board_tex : repeat_disable, filter_nearest;
 uniform sampler2D bg_tex : repeat_disable, filter_linear;
 
 // Geometry (pixels)
 uniform vec2 rect_size = vec2(320.0, 640.0);
-uniform float corner_radius_px = 24.0;
+uniform float corner_radius_px = 26.0;
 
 // Grid
 uniform vec2 cell_count = vec2(10.0, 20.0);
 uniform float vanish_offset = 2.0;
 uniform float cell_padding : hint_range(0.0, 0.2) = 0.04;
 
-// Liquid glass (pixels unless noted)
-uniform float blur_px : hint_range(0.0, 12.0) = 3.0;        // extra shader blur on top of baked blur
-uniform float warp_band_px : hint_range(0.0, 300.0) = 80.0; // how far the edge lens reaches inward
-uniform float warp_px : hint_range(0.0, 80.0) = 30.0;       // max refraction displacement at edge
-uniform float chroma_px : hint_range(0.0, 20.0) = 6.0;      // chromatic aberration at edge
-uniform float rim_width_px : hint_range(0.5, 10.0) = 2.5;
-uniform float rim_intensity : hint_range(0.0, 2.0) = 0.9;
-uniform float sheen_intensity : hint_range(0.0, 0.5) = 0.10;
+// Glass optics
+uniform float bevel_px : hint_range(1.0, 200.0) = 40.0;      // rolled-edge width
+uniform float thickness_px : hint_range(0.0, 300.0) = 60.0;  // slab thickness (refraction throw)
+uniform float ior : hint_range(1.0, 2.0) = 1.45;
+uniform float dispersion : hint_range(0.0, 0.2) = 0.03;      // per-channel IOR spread
+uniform float blur_px : hint_range(0.0, 12.0) = 2.5;         // extra frost on top of baked blur
+uniform float saturation : hint_range(0.5, 2.0) = 1.35;      // vibrancy
+uniform float brightness : hint_range(0.5, 1.5) = 1.06;
+uniform float spec_intensity : hint_range(0.0, 3.0) = 1.0;
+uniform float rim_width_px : hint_range(0.5, 10.0) = 2.0;
+uniform float sheen_intensity : hint_range(0.0, 0.5) = 0.05;
 uniform float sheen_falloff : hint_range(0.1, 1.0) = 0.35;
-uniform vec4 glass_tint : source_color = vec4(0.05, 0.06, 0.12, 0.22);
-uniform vec4 rim_color : source_color = vec4(1.0, 1.0, 1.0, 0.55);
+uniform vec4 glass_tint : source_color = vec4(0.06, 0.08, 0.14, 0.15);
+uniform vec4 rim_color : source_color = vec4(1.0, 1.0, 1.0, 0.8);
 
 // Piece colors
 uniform vec4 color_1 : source_color = vec4(0.0, 0.88, 0.88, 1.0);
@@ -46,7 +54,7 @@ uniform vec4 color_7 : source_color = vec4(1.0, 0.55, 0.0, 1.0);
 uniform vec4 flash_rows = vec4(-1.0);
 uniform float flash_intensity : hint_range(0.0, 1.0) = 0.0;
 
-// Squircle SDF (p, half-size, radius — all in pixels)
+// Squircle SDF (p, half-size, radius — pixels)
 float board_sdf(vec2 p, vec2 b, float r) {
 	vec2 q = abs(p) - b + r;
 	float d = min(max(q.x, q.y), 0.0);
@@ -66,48 +74,81 @@ vec4 get_color(float type) {
 	return color_7;
 }
 
+// 5-tap cross blur (bg_tex is already pre-blurred; this just smooths seams)
+vec3 blur_sample(vec2 uv, vec2 px_size) {
+	vec2 o = px_size * blur_px;
+	vec3 s = texture(bg_tex, uv).rgb * 0.4;
+	s += texture(bg_tex, uv + vec2(o.x, 0.0)).rgb * 0.15;
+	s += texture(bg_tex, uv - vec2(o.x, 0.0)).rgb * 0.15;
+	s += texture(bg_tex, uv + vec2(0.0, o.y)).rgb * 0.15;
+	s += texture(bg_tex, uv - vec2(0.0, o.y)).rgb * 0.15;
+	return s;
+}
+
+// Refract the straight-down view ray through the slab surface and
+// project it across the glass thickness onto the background plane.
+vec2 refract_offset(vec3 n, float eta) {
+	vec3 rd = refract(vec3(0.0, 0.0, -1.0), n, eta);
+	return rd.xy / max(abs(rd.z), 0.35) * thickness_px;
+}
+
 void fragment() {
 	// ── Shape (pixel space, origin at rect center) ──
+	vec2 half_size = rect_size * 0.5;
 	vec2 px = (UV - 0.5) * rect_size;
-	float sdf = board_sdf(px, rect_size * 0.5, corner_radius_px);
+	float sdf = board_sdf(px, half_size, corner_radius_px);
 
 	// 1.5px anti-aliased edge
 	float board_alpha = 1.0 - smoothstep(-0.75, 0.75, sdf);
 	if (board_alpha < 0.004)
 		discard;
 
-	// Edge proximity: 0 deep inside, 1 at the edge (within warp_band_px)
-	float edge = clamp(1.0 + sdf / warp_band_px, 0.0, 1.0);
-	// Cubic ramp = lens that bulges near the border, flat in the middle
-	float lens = edge * edge * edge;
+	// ── Surface normal of the glass slab ──
+	// Lateral direction: SDF gradient (central differences, 1px step)
+	float gx = board_sdf(px + vec2(1.0, 0.0), half_size, corner_radius_px)
+	         - board_sdf(px - vec2(1.0, 0.0), half_size, corner_radius_px);
+	float gy = board_sdf(px + vec2(0.0, 1.0), half_size, corner_radius_px)
+	         - board_sdf(px - vec2(0.0, 1.0), half_size, corner_radius_px);
+	vec2 grad = normalize(vec2(gx, gy) + vec2(1e-5, 0.0));
 
-	vec2 dir = length(px) > 0.5 ? normalize(px) : vec2(0.0, 1.0);
+	// Circular bevel profile: normal tilts fully sideways at the rim,
+	// flattens to straight-up over bevel_px. (nxy = cos of bevel angle)
+	float nxy = clamp(1.0 + sdf / bevel_px, 0.0, 1.0) * 0.97;
+	vec3 n = vec3(grad * nxy, sqrt(1.0 - nxy * nxy));
 
-	// ── Refraction: displace the background sample inward near edges ──
-	vec2 base_uv = SCREEN_UV - dir * lens * warp_px * SCREEN_PIXEL_SIZE;
+	// ── Refraction with dispersion (separate IOR per channel) ──
+	vec2 off_r = refract_offset(n, 1.0 / (ior - dispersion));
+	vec2 off_g = refract_offset(n, 1.0 / ior);
+	vec2 off_b = refract_offset(n, 1.0 / (ior + dispersion));
 
-	// ── Frosted blur (9 taps; bg_tex is already pre-blurred) ──
-	// Chromatic aberration grows toward the edge with the lens.
-	vec2 chroma = dir * (0.3 + lens) * chroma_px * SCREEN_PIXEL_SIZE;
-	vec3 bg = vec3(0.0);
-	for (int x = -1; x <= 1; x++) {
-		for (int y = -1; y <= 1; y++) {
-			vec2 o = vec2(float(x), float(y)) * blur_px * SCREEN_PIXEL_SIZE;
-			bg.r += texture(bg_tex, base_uv + o - chroma).r;
-			bg.g += texture(bg_tex, base_uv + o).g;
-			bg.b += texture(bg_tex, base_uv + o + chroma).b;
-		}
-	}
-	bg /= 9.0;
+	vec3 bg;
+	bg.r = blur_sample(SCREEN_UV + off_r * SCREEN_PIXEL_SIZE, SCREEN_PIXEL_SIZE).r;
+	bg.g = blur_sample(SCREEN_UV + off_g * SCREEN_PIXEL_SIZE, SCREEN_PIXEL_SIZE).g;
+	bg.b = blur_sample(SCREEN_UV + off_b * SCREEN_PIXEL_SIZE, SCREEN_PIXEL_SIZE).b;
 
-	// ── Glass tint (light, so the background stays visible) ──
+	// ── Vibrancy: glass saturates and lifts what's behind it ──
+	float luma = dot(bg, vec3(0.299, 0.587, 0.114));
+	bg = clamp(mix(vec3(luma), bg, saturation) * brightness, 0.0, 1.0);
+
+	// Light tint so the panel reads as material without hiding the bg
 	vec3 color = mix(bg, glass_tint.rgb, glass_tint.a);
 
-	// ── Rim light: bright hairline just inside the edge ──
-	float rim = 1.0 - smoothstep(0.0, rim_width_px, -sdf);
-	color += rim_color.rgb * rim * rim_color.a * rim_intensity;
+	// ── Speculars: key light top-left, counter glint bottom-right ──
+	vec3 L1 = normalize(vec3(-0.4, -0.65, 0.65));
+	vec3 L2 = normalize(vec3(0.4, 0.65, 0.5));
+	float spec = pow(max(dot(n, L1), 0.0), 24.0)
+	           + 0.55 * pow(max(dot(n, L2), 0.0), 24.0);
 
-	// ── Top sheen ──
+	// Fresnel-ish bright band hugging the whole rim
+	float fresnel = pow(nxy, 3.0) * 0.16;
+
+	// Hairline at the very edge
+	float hairline = (1.0 - smoothstep(0.0, rim_width_px, -sdf)) * 0.25;
+
+	color += rim_color.rgb * rim_color.a *
+	         (spec * spec_intensity + fresnel + hairline);
+
+	// ── Faint top sheen ──
 	float sheen = smoothstep(sheen_falloff, 0.0, UV.y) * sheen_intensity;
 	color += vec3(sheen);
 
@@ -125,8 +166,8 @@ void fragment() {
 		              local_uv.y < pad_min.y || local_uv.y > pad_max.y;
 
 		if (in_pad) {
-			// Grid line — slightly darker glass
-			color *= 0.82;
+			// Grid line — barely-there etched line, keeps the slab feel
+			color *= 0.9;
 		} else {
 			float tex_u = (cell_coord.x + 0.5) / 10.0;
 			float tex_v = (cell_coord.y + vanish_offset + 0.5) / 22.0;
