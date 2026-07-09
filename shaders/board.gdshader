@@ -185,11 +185,14 @@ float mass_sdf(vec2 px, vec2 cc, int mask, float r) {
 	if (diag_filled) {
 		return -min(hc.x, hc.y);   // deep interior
 	}
-	// Concave: mass = complement of the rounded notch beyond (hc, hc)
-	vec2 q = lp - hc + r;
-	float dd = min(max(q.x, q.y), 0.0);
-	float notch = dd + length(max(q, vec2(0.0))) - r;
-	return -notch;
+	// Concave (reentrant) corner: the mass is the UNION of the two fused
+	// half-cells {x<=hc} ∪ {y<=hc}; round that union's inner corner by r
+	// (opUnionRound). This fillets ONLY the corner — the cell interior stays
+	// deep-negative, so no triangular chunk is carved out.
+	float a = lp.x - hc.x;
+	float b = lp.y - hc.y;
+	vec2 u = max(vec2(r - a, r - b), vec2(0.0));
+	return max(r, min(a, b)) - length(u);
 }
 
 // Occupied-weighted bilinear blend of the four nearest cells' piece colors.
