@@ -14,7 +14,8 @@
       "Bash(apt install *)",
       "Read(//root/.claude/**)",
       "Read(//root/.claude/projects/**)",
-      "Bash(gh repo *)"
+      "Bash(gh repo *)",
+      "Bash(xxd)"
     ]
   }
 }

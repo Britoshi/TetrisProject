@@ -423,9 +423,12 @@ func _position_button(i: int, rect: Rect2) -> void:
 	_btn_bodies[i].position = Vector2.ZERO
 	_btn_bodies[i].size = rect.size
 
-	# Shape uniforms — corner radius as fraction of smaller dimension (Apple-like)
+	# Shape uniforms — corner radius proportional to smaller dimension (Apple-like)
 	var min_dim := minf(rect.size.x, rect.size.y)
-	_btn_shaders[i].set_shader_parameter("corner_radius", BTN_CORNER_RADIUS_FRAC * (min_dim / maxf(rect.size.x, 1.0)))
+	var body_corner_px: float = BTN_CORNER_RADIUS_FRAC * min_dim
+	_btn_shaders[i].set_shader_parameter("corner_radius", body_corner_px / maxf(rect.size.x, 1.0))
+	# Shadow panel: smaller radius stays inside squircle body
+	panel.add_theme_stylebox_override("panel", _make_shadow_style(int(body_corner_px * 0.7)))
 
 	# Theme uniforms
 	_apply_theme_to_button(i)
