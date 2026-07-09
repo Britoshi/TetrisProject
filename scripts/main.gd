@@ -271,7 +271,8 @@ func _create_board_node() -> void:
 
 	# Colors from Constants.COLORS
 	var c := Constants.COLORS
-	_board_material.set_shader_parameter("color_empty", Color(0.05, 0.05, 0.08, 1.0))
+	_board_material.set_shader_parameter("glass_color", Color(0.02, 0.02, 0.06, 0.65))
+	_board_material.set_shader_parameter("grid_color", Color(0.0, 0.0, 0.0, 0.25))
 	_board_material.set_shader_parameter("color_1", c[Constants.PieceType.I])
 	_board_material.set_shader_parameter("color_2", c[Constants.PieceType.O])
 	_board_material.set_shader_parameter("color_3", c[Constants.PieceType.T])
@@ -279,7 +280,6 @@ func _create_board_node() -> void:
 	_board_material.set_shader_parameter("color_5", c[Constants.PieceType.Z])
 	_board_material.set_shader_parameter("color_6", c[Constants.PieceType.J])
 	_board_material.set_shader_parameter("color_7", c[Constants.PieceType.L])
-	_board_material.set_shader_parameter("grid_color", Color(0.02, 0.02, 0.04, 1.0))
 	_board_material.set_shader_parameter("flash_rows", Vector4(-1.0, -1.0, -1.0, -1.0))
 
 	# Data texture (10x22, FORMAT_RF = 32-bit float per pixel)
