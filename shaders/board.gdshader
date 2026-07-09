@@ -27,8 +27,7 @@ uniform float vanish_offset = 2.0;
 uniform float cell_padding : hint_range(0.0, 0.2) = 0.04;
 
 // Glass optics
-uniform float bevel_px : hint_range(1.0, 300.0) = 70.0;      // rolled-edge width
-uniform float thickness_px : hint_range(0.0, 400.0) = 90.0;  // slab thickness (refraction throw)
+uniform float thickness_px : hint_range(0.0, 400.0) = 90.0;  // water depth (refraction throw)
 uniform float ior : hint_range(1.0, 2.0) = 1.45;
 uniform float dispersion : hint_range(0.0, 0.2) = 0.04;      // per-channel IOR spread
 uniform float frost_lod : hint_range(0.0, 6.0) = 1.8;        // interior frost (mip level)
@@ -202,16 +201,15 @@ void fragment() {
 	if (board_alpha < 0.004)
 		discard;
 
-	// ── Surface normal of the glass slab ──
-	// Outer rim: full rolled-edge lens (SDF gradient, central differences)
+	// ── Surface normal of the water ──
+	// Outer boundary direction (container wall normal, points outward)
 	float gx = board_sdf(px + vec2(1.0, 0.0), half_size, corner_radius_px)
 	         - board_sdf(px - vec2(1.0, 0.0), half_size, corner_radius_px);
 	float gy = board_sdf(px + vec2(0.0, 1.0), half_size, corner_radius_px)
 	         - board_sdf(px - vec2(0.0, 1.0), half_size, corner_radius_px);
 	vec2 grad_o = normalize(vec2(gx, gy) + vec2(1e-5, 0.0));
-	float bev_out = clamp(1.0 + bsdf / bevel_px, 0.0, 1.0);
 
-	// Hole rim: much gentler meniscus tilt toward the cutout
+	// Hole rim: gentle meniscus tilt toward the cutout
 	float bev_hole = 0.0;
 	vec2 lat_hole = vec2(0.0);
 	if (ghost_active > 0.5) {
@@ -223,18 +221,21 @@ void fragment() {
 		lat_hole = grad_h * bev_hole * hole_tilt;
 	}
 
-	// Wall meniscus: water tilts up where it laps against the locked stack
+	// ── ONE shore field: container walls + locked stack are both solid.
+	// The water laps against all of them with identical behavior.
 	vec2 grid_pos = UV * cell_count;
 	vec2 cell_coord = floor(grid_pos);
 	float wall_sd;
 	vec2 wall_g;
 	wall_field(px, cell_coord, wall_sd, wall_g);
-	float bev_wall = clamp(1.0 - max(wall_sd, 0.0) / wall_bevel_px, 0.0, 1.0);
-	bev_wall *= bev_wall; // eased shoulder
-	vec2 lat_wall = wall_sd > 0.0 ? wall_g * bev_wall * wall_tilt : vec2(0.0);
+	float shore_sd = min(wall_sd, -bsdf);        // distance to nearest solid
+	vec2 shore_g = wall_sd < -bsdf ? wall_g : -grad_o; // away from that solid
+	float bev_shore = clamp(1.0 - max(shore_sd, 0.0) / wall_bevel_px, 0.0, 1.0);
+	bev_shore *= bev_shore; // eased shoulder
+	vec2 lat_shore = shore_sd > 0.0 ? shore_g * bev_shore * wall_tilt : vec2(0.0);
 
-	float bev = max(max(bev_out, bev_hole), bev_wall);
-	vec2 lat = grad_o * bev_out + lat_hole + lat_wall;
+	float bev = max(bev_hole, bev_shore);
+	vec2 lat = lat_hole + lat_shore;
 
 	// ── Water surface: sum of travelling directional waves ──
 	// Four octaves: slow swell (~300px), waves (~150px), chop (~75px),
@@ -337,8 +338,8 @@ void fragment() {
 	// Hairline at the very edge (outer rim and hole rim alike), plus a
 	// softer waterline tracing the stack contour
 	float hairline = (1.0 - smoothstep(0.0, rim_width_px, -csdf)) * 0.25;
-	if (wall_sd < 1e5) {
-		hairline += (1.0 - smoothstep(0.0, rim_width_px * 1.5, abs(wall_sd))) * 0.15;
+	if (shore_sd < 1e5) {
+		hairline += (1.0 - smoothstep(0.0, rim_width_px * 1.5, abs(shore_sd))) * 0.15;
 	}
 
 	color += rim_color.rgb * rim_color.a *
@@ -349,15 +350,15 @@ void fragment() {
 	float sheen = smoothstep(sheen_falloff, 0.0, UV.y) * sheen_intensity;
 	color += vec3(sheen);
 
-	// ── Shoreline against the locked stack ──
-	if (wall_sd < 1e5 && wall_sd >= 0.0) {
-		float band = 1.0 - smoothstep(0.0, wall_bevel_px, wall_sd);
+	// ── Shoreline: container walls and locked stack alike ──
+	if (shore_sd < 1e5 && shore_sd >= 0.0) {
+		float band = 1.0 - smoothstep(0.0, wall_bevel_px, shore_sd);
 
 		// Wet contact shadow: the water darkens as it deepens at the wall
 		color *= 1.0 - band * band * shore_shadow;
 
 		// Foam: shimmering speckle band hugging the waterline
-		float fband = 1.0 - smoothstep(0.0, foam_width_px, wall_sd);
+		float fband = 1.0 - smoothstep(0.0, foam_width_px, shore_sd);
 		float grain = hash21(floor(px * 0.6));
 		float foam = fband * fband *
 			smoothstep(0.35, 1.0,

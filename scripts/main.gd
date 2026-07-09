@@ -779,7 +779,6 @@ func _position_all_nodes() -> void:
 	if _board_material:
 		_board_material.set_shader_parameter("rect_size", Vector2(board_w, board_h))
 		_board_material.set_shader_parameter("corner_radius_px", cs * 0.8)
-		_board_material.set_shader_parameter("bevel_px", cs * 2.0)
 		_board_material.set_shader_parameter("thickness_px", cs * 2.6)
 		_board_material.set_shader_parameter("hole_bevel_px", cs * 0.9)
 		_board_material.set_shader_parameter("wall_bevel_px", cs * 1.2)
