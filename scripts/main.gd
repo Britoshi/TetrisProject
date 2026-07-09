@@ -40,7 +40,8 @@ var das_right_acc: float = 0.0
 var das_left_active: bool = false
 var das_right_active: bool = false
 
-# Line clear animation
+# Line clear animation (off by default — set to true to enable flash)
+const LINE_CLEAR_ANIMATION: bool = false
 var line_clear_timer: float = 0.0
 var cleared_row_indices: Array[int] = []
 
@@ -862,12 +863,17 @@ func _lock_piece() -> void:
 		print("GAME OVER — vanish zone breached")
 		return
 
-	# Line clear — pause for flash animation
+	# Line clear
 	cleared_row_indices = board.clear_lines()
 	if cleared_row_indices.size() > 0:
-		line_clear_timer = 0.4
-		state = State.LINE_CLEAR
-		return  # _process_line_clear handles scoring + spawn
+		if LINE_CLEAR_ANIMATION:
+			line_clear_timer = 0.4
+			state = State.LINE_CLEAR
+			return  # _process_line_clear handles scoring + spawn
+		else:
+			# Instant — no animation
+			_score_lines(cleared_row_indices.size(), false)
+			_update_board_texture()
 
 	# Sprint completion check
 	if sprint_target > 0 and lines_cleared >= sprint_target:
