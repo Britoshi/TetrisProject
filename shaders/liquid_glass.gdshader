@@ -93,39 +93,39 @@ void fragment() {
 	if (touch_uv.x >= 0.0 && touch_depth > 0.005) {
 		vec2 touch_dir = touch_dist > 0.001 ? (touch_uv - UV) / touch_dist : vec2(0.0);
 
-		// Depression: strong inward bulge at touch point
-		float depress_radius = 0.07 + touch_depth * 0.05;
+		// Depression: wide inward bulge visible around fingertip
+		float depress_radius = 0.28 + touch_depth * 0.08;
 		float depression = exp(-touch_dist * touch_dist / (depress_radius * depress_radius)) * touch_depth;
-		warp_offset += touch_dir * depression * 0.04;
+		warp_offset += touch_dir * depression * 0.09;
 
-		// Ripple: expanding rings on press/release (slower, more visible)
+		// Ripple: expanding rings on press/release, wide enough to see
 		float time_since = TIME - touch_time;
-		float ripple_life = clamp(time_since * 2.0, 0.0, 1.0); // 0→1 over 0.5s
-		float ripple_radius = ripple_life * 0.5;
-		float ripple_width = 0.05 * (1.0 - ripple_life * 0.5);
+		float ripple_life = clamp(time_since * 2.0, 0.0, 1.0);
+		float ripple_radius = 0.15 + ripple_life * 0.55;
+		float ripple_width = 0.06 * (1.0 - ripple_life * 0.4);
 		float ripple = smoothstep(ripple_radius - ripple_width, ripple_radius, touch_dist)
 		             - smoothstep(ripple_radius, ripple_radius + ripple_width, touch_dist);
 		ripple *= (1.0 - ripple_life) * touch_depth;
-		warp_offset += touch_dir * ripple * 0.03;
+		warp_offset += touch_dir * ripple * 0.05;
 
 		// Secondary ring
-		float r2_radius = ripple_radius - 0.1;
+		float r2_radius = ripple_radius - 0.12;
 		if (r2_radius > 0.0) {
 			float r2 = smoothstep(r2_radius - ripple_width * 0.7, r2_radius, touch_dist)
 			         - smoothstep(r2_radius, r2_radius + ripple_width * 0.5, touch_dist);
-			r2 *= (1.0 - ripple_life) * 0.4 * touch_depth;
-			warp_offset += touch_dir * r2 * 0.015;
+			r2 *= (1.0 - ripple_life) * 0.5 * touch_depth;
+			warp_offset += touch_dir * r2 * 0.025;
 		}
 
-		// Ongoing micro-pulse while held (glass "breathing")
+		// Ongoing micro-pulse while held (visible around finger)
 		float settled = clamp((touch_depth - 0.9) * 10.0, 0.0, 1.0);
-		float pulse = (sin(TIME * 7.0 + touch_dist * 25.0) * 0.012
-		             + cos(TIME * 11.0 - touch_dist * 18.0) * 0.008) * settled
-		             * exp(-touch_dist * touch_dist * 50.0);
+		float pulse = (sin(TIME * 7.0 + touch_dist * 15.0) * 0.018
+		             + cos(TIME * 11.0 - touch_dist * 10.0) * 0.012) * settled
+		             * exp(-touch_dist * touch_dist * 12.0);
 		warp_offset += touch_dir * pulse;
 
-		// Chromatic aberration boost near touch
-		touch_ca_boost = exp(-touch_dist * touch_dist * 70.0) * touch_depth * 2.5;
+		// Chromatic aberration boost near touch (wider)
+		touch_ca_boost = exp(-touch_dist * touch_dist * 15.0) * touch_depth * 3.0;
 	}
 
 	vec2 warped_uv = SCREEN_UV - warp_offset;
@@ -159,8 +159,8 @@ void fragment() {
 
 	// ── Touch glow: warm light radiates from touch point ──
 	if (touch_uv.x >= 0.0 && touch_depth > 0.01) {
-		float touch_glow = exp(-touch_dist * touch_dist * 25.0) * touch_depth;
-		color += glow_color.rgb * touch_glow * glow_color.a * 0.6;
+		float touch_glow = exp(-touch_dist * touch_dist * 8.0) * touch_depth;
+		color += glow_color.rgb * touch_glow * glow_color.a * 0.8;
 	}
 
 	// ── Static press glow (edge-based, for keyboard/gamepad press) ──

@@ -811,7 +811,7 @@ func _drag_normal(pos: Vector2, index: int) -> void:
 	# If finger is still on the same button, just update the UV
 	if _btn_rects[ci].has_point(pos):
 		var uv := Vector2((pos.x - _btn_rects[ci].position.x) / _btn_rects[ci].size.x,
-		                  (pos.y - _btn_rects[ci].position.y) / _btn_rects[ci].size.y)
+						  (pos.y - _btn_rects[ci].position.y) / _btn_rects[ci].size.y)
 		_wobble_touch_uv[ci] = uv
 		return
 
@@ -829,7 +829,7 @@ func _drag_normal(pos: Vector2, index: int) -> void:
 			_btn_pressed[i] = true
 			_btn_shaders[i].set_shader_parameter("pressed", 1.0)
 			var uv := Vector2((pos.x - _btn_rects[i].position.x) / _btn_rects[i].size.x,
-			                  (pos.y - _btn_rects[i].position.y) / _btn_rects[i].size.y)
+							  (pos.y - _btn_rects[i].position.y) / _btn_rects[i].size.y)
 			_wobble_touch_uv[i] = uv
 			_wobble_target[i] = 1.0
 			_wobble_event_time[i] = _elapsed
