@@ -38,9 +38,15 @@ uniform float wave_speed : hint_range(0.0, 4.0) = 1.0;
 uniform float wave_scale : hint_range(0.2, 5.0) = 1.0;       // spatial frequency multiplier
 uniform float glint_intensity : hint_range(0.0, 2.0) = 0.5;  // sun sparkle off the waves
 
-// Splash ripples (piece locks). xy = center in board px (origin at rect
-// center), z = age in seconds (< 0 inactive), w = amplitude.
-uniform vec4 splashes[6];
+// Splash ripples (piece locks). The wavefront is an iso-contour of the
+// distance field to the piece's 4 cells, so it starts tetromino-shaped
+// and rounds off as it expands.
+// meta: x = age s (< 0 inactive), y = amplitude, z = cell half-size px.
+// cells_a: xy = cell0 center, zw = cell1 center (board px, origin at rect center).
+// cells_b: xy = cell2 center, zw = cell3 center.
+uniform vec4 splash_meta[6];
+uniform vec4 splash_cells_a[6];
+uniform vec4 splash_cells_b[6];
 uniform float splash_strength : hint_range(0.0, 2.0) = 0.7;
 uniform float splash_speed_px : hint_range(50.0, 600.0) = 240.0; // ring expansion px/s
 uniform float saturation : hint_range(0.5, 2.0) = 1.35;      // vibrancy
@@ -83,6 +89,26 @@ vec4 get_color(float type) {
 	if (type < 5.5) return color_5;
 	if (type < 6.5) return color_6;
 	return color_7;
+}
+
+// Accumulate the signed distance (and its gradient) to one splash cell —
+// an axis-aligned square of half-size hc. Union via min.
+void cell_sdf(vec2 rel, float hc, inout float sd, inout vec2 sg) {
+	vec2 q = abs(rel) - vec2(hc);
+	float dj;
+	vec2 gj;
+	if (max(q.x, q.y) > 0.0) {
+		vec2 qc = max(q, vec2(0.0));
+		dj = length(qc);
+		gj = sign(rel) * qc / max(dj, 1e-4);
+	} else {
+		dj = max(q.x, q.y);
+		gj = q.x > q.y ? vec2(sign(rel.x), 0.0) : vec2(0.0, sign(rel.y));
+	}
+	if (dj < sd) {
+		sd = dj;
+		sg = gj;
+	}
 }
 
 // Refract the straight-down view ray through the slab surface and
@@ -129,29 +155,44 @@ void fragment() {
 	water += vec2(-0.95, -0.31) * cos(dot(wp, vec2(-0.95, -0.31)) * 0.150 + t * 3.7) * 0.12;
 	water *= wave_strength;
 
-	// ── Splash ripples: expanding damped rings where pieces land ──
-	// Main ring + trailing wavelet + initial plunge dimple, like a drop
-	// hitting the surface.
+	// ── Splash ripples: piece-shaped wavefronts where pieces land ──
+	// The wave crest follows iso-contours of the piece's distance field:
+	// it starts as the tetromino outline and rounds off as it expands.
 	vec2 splash_lat = vec2(0.0);
 	float splash_glow = 0.0;
 	for (int i = 0; i < 6; i++) {
-		float age = splashes[i].z;
-		float amp = splashes[i].w;
+		float age = splash_meta[i].x;
+		float amp = splash_meta[i].y;
 		if (age < 0.0 || amp <= 0.001) {
 			continue;
 		}
-		vec2 d = px - splashes[i].xy;
-		float dist = length(d);
-		vec2 sdir = dist > 0.5 ? d / dist : vec2(0.0);
+		float hc = splash_meta[i].z;
+
+		// Union SDF (+gradient) of the piece's 4 cells
+		float sd = 1e6;
+		vec2 sg = vec2(0.0, 1.0);
+		cell_sdf(px - splash_cells_a[i].xy, hc, sd, sg);
+		cell_sdf(px - splash_cells_a[i].zw, hc, sd, sg);
+		cell_sdf(px - splash_cells_b[i].xy, hc, sd, sg);
+		cell_sdf(px - splash_cells_b[i].zw, hc, sd, sg);
+
 		float R = age * splash_speed_px;
 		float damp = exp(-age * 2.0) * amp;
-		float q1 = (dist - R) / 26.0;
-		float q2 = (dist - R * 0.62) / 20.0;
+		float dpos = max(sd, 0.0); // distance outside the piece footprint
+
+		// Main crest + trailing wavelet, travelling outward from the outline
+		float q1 = (dpos - R) / 24.0;
+		float q2 = (dpos - R * 0.62) / 18.0;
 		float ring = exp(-q1 * q1);
 		float ring2 = 0.5 * exp(-q2 * q2);
-		float plunge = exp(-dist * dist / 900.0) * clamp(1.0 - age * 6.0, 0.0, 1.0);
-		splash_lat += sdir * (ring + ring2) * damp;
-		splash_lat -= sdir * plunge * amp * 0.8;
+
+		// Plunge: the whole piece footprint stamps down, then rebounds
+		float inside = clamp(-sd / max(hc, 1.0), 0.0, 1.0);
+		float plunge = (inside + 0.5 * exp(-dpos * dpos / 400.0))
+		             * clamp(1.0 - age * 5.0, 0.0, 1.0);
+
+		splash_lat += sg * (ring + ring2) * damp;
+		splash_lat -= sg * plunge * amp * 0.7;
 		splash_glow += ring * damp;
 	}
 

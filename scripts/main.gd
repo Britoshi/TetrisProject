@@ -98,8 +98,9 @@ var _next_materials: Array = []
 var _bg_fallback_rect: ColorRect = null
 var _bg_bake_size: Vector2 = Vector2.ZERO
 
-# Water splash ripples (piece lock). Vector4: xy = board-local px
-# (origin at board center), z = age seconds, w = amplitude.
+# Water splash ripples (piece lock). Each entry is a Dictionary:
+# cells: PackedVector2Array (4 cell centers, board px, origin at board
+# center), age: float, amp: float, half: float (cell half-size px).
 const SPLASH_MAX: int = 6
 const SPLASH_LIFE: float = 1.6
 var _splashes: Array = []
@@ -647,10 +648,15 @@ func _update_next_preview() -> void:
 			_next_materials[i][j].set_shader_parameter("alpha", 1.0)
 			_next_cells[i][j].visible = true
 
-func _spawn_splash(pos: Vector2, amp: float = 1.0) -> void:
-	"""Start a water-drop splash ripple at a board-local position
-	(pixels, origin at board center)."""
-	_splashes.append(Vector4(pos.x, pos.y, 0.0, amp))
+func _spawn_splash(cell_centers: PackedVector2Array, amp: float = 1.0) -> void:
+	"""Start a piece-shaped splash ripple. cell_centers are the 4 cell
+	centers in board-local pixels (origin at board center)."""
+	_splashes.append({
+		"cells": cell_centers,
+		"age": 0.0,
+		"amp": amp,
+		"half": _cell_size * 0.5,
+	})
 	while _splashes.size() > SPLASH_MAX:
 		_splashes.pop_front()
 
@@ -666,23 +672,32 @@ func _update_splashes(delta: float) -> void:
 		return
 	_splashes_clean = false
 	for i in range(_splashes.size() - 1, -1, -1):
-		var s: Vector4 = _splashes[i]
-		s.z += delta
-		if s.z > SPLASH_LIFE:
+		_splashes[i]["age"] += delta
+		if _splashes[i]["age"] > SPLASH_LIFE:
 			_splashes.remove_at(i)
-		else:
-			_splashes[i] = s
 	_push_splash_uniform()
 
 func _push_splash_uniform() -> void:
-	var arr := PackedVector4Array()
-	arr.resize(SPLASH_MAX)
+	var meta := PackedVector4Array()
+	var cells_a := PackedVector4Array()
+	var cells_b := PackedVector4Array()
+	meta.resize(SPLASH_MAX)
+	cells_a.resize(SPLASH_MAX)
+	cells_b.resize(SPLASH_MAX)
 	for i in range(SPLASH_MAX):
 		if i < _splashes.size():
-			arr[i] = _splashes[i]
+			var s: Dictionary = _splashes[i]
+			var c: PackedVector2Array = s["cells"]
+			meta[i] = Vector4(s["age"], s["amp"], s["half"], 0.0)
+			cells_a[i] = Vector4(c[0].x, c[0].y, c[1].x, c[1].y)
+			cells_b[i] = Vector4(c[2].x, c[2].y, c[3].x, c[3].y)
 		else:
-			arr[i] = Vector4(0.0, 0.0, -1.0, 0.0)
-	_board_material.set_shader_parameter("splashes", arr)
+			meta[i] = Vector4(-1.0, 0.0, 0.0, 0.0)
+			cells_a[i] = Vector4.ZERO
+			cells_b[i] = Vector4.ZERO
+	_board_material.set_shader_parameter("splash_meta", meta)
+	_board_material.set_shader_parameter("splash_cells_a", cells_a)
+	_board_material.set_shader_parameter("splash_cells_b", cells_b)
 
 func _set_flash_rows(rows: Array, intensity: float) -> void:
 	"""Set line clear flash uniforms on the board shader."""
@@ -985,13 +1000,14 @@ func _lock_piece(splash_amp: float = 1.0) -> void:
 	controller.is_locked = true
 	var cells = controller.get_absolute_cells()
 
-	# Water-drop splash where the piece landed
-	var centroid := Vector2.ZERO
-	for cell in cells:
-		centroid += Vector2(cell.x + 0.5, cell.y - 2.0 + 0.5)
-	centroid /= float(cells.size())
+	# Piece-shaped splash where the piece landed
 	var board_size := Vector2(Constants.COLS, Constants.VISIBLE_ROWS) * float(_cell_size)
-	_spawn_splash(centroid * float(_cell_size) - board_size * 0.5, splash_amp)
+	var centers := PackedVector2Array()
+	for cell in cells:
+		var c := Vector2(cell.x + 0.5, cell.y - 2.0 + 0.5) * float(_cell_size)
+		centers.append(c - board_size * 0.5)
+	if centers.size() == 4:
+		_spawn_splash(centers, splash_amp)
 
 	# Score T-spin before locking
 	var tspin: bool = false
