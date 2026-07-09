@@ -27,7 +27,8 @@ uniform float vanish_offset = 2.0;
 uniform float cell_padding : hint_range(0.0, 0.2) = 0.04;
 
 // Glass optics
-uniform float thickness_px : hint_range(0.0, 400.0) = 90.0;  // water depth (refraction throw)
+uniform float bevel_px : hint_range(1.0, 300.0) = 70.0;      // rolled-edge lens width (ALL walls)
+uniform float thickness_px : hint_range(0.0, 400.0) = 90.0;  // slab thickness (refraction throw)
 uniform float ior : hint_range(1.0, 2.0) = 1.45;
 uniform float dispersion : hint_range(0.0, 0.2) = 0.04;      // per-channel IOR spread
 uniform float frost_lod : hint_range(0.0, 6.0) = 1.8;        // interior frost (mip level)
@@ -61,13 +62,8 @@ uniform float hole_bevel_px : hint_range(1.0, 200.0) = 34.0;  // lens rim width 
 uniform float hole_tilt : hint_range(0.0, 1.0) = 0.35;        // hole rim refraction strength
 uniform vec4 ghost_color : source_color = vec4(1.0, 1.0, 1.0, 0.28); // piece-color wash over the window
 
-// Locked blocks are solid land: the water forms a meniscus where it
-// laps against the stack.
-uniform float wall_bevel_px : hint_range(1.0, 200.0) = 44.0;  // meniscus width at the stack
-uniform float wall_tilt : hint_range(0.0, 1.0) = 0.55;        // meniscus refraction strength
-uniform float foam_width_px : hint_range(1.0, 60.0) = 12.0;   // foam band along the waterline
-uniform float foam_intensity : hint_range(0.0, 1.5) = 0.55;
-uniform float shore_shadow : hint_range(0.0, 0.6) = 0.22;     // wet contact darkening at the stack
+// Locked blocks are walls, exactly like the four container edges: the
+// glass boundary wraps around the stack with the SAME rolled-edge lens.
 uniform float saturation : hint_range(0.5, 2.0) = 1.35;      // vibrancy
 uniform float brightness : hint_range(0.5, 1.5) = 1.06;
 uniform float spec_intensity : hint_range(0.0, 3.0) = 1.0;
@@ -108,12 +104,6 @@ vec4 get_color(float type) {
 	if (type < 5.5) return color_5;
 	if (type < 6.5) return color_6;
 	return color_7;
-}
-
-float hash21(vec2 p) {
-	p = fract(p * vec2(123.34, 345.45));
-	p += dot(p, p + 34.345);
-	return fract(p.x * p.y);
 }
 
 // Plain box SDF (no gradient)
@@ -201,41 +191,40 @@ void fragment() {
 	if (board_alpha < 0.004)
 		discard;
 
-	// ── Surface normal of the water ──
-	// Outer boundary direction (container wall normal, points outward)
+	// ── Surface normal of the glass slab ──
+	// The glass boundary = outer rounded rect UNION the locked stack
+	// contour. Every wall gets the IDENTICAL rolled-edge lens.
 	float gx = board_sdf(px + vec2(1.0, 0.0), half_size, corner_radius_px)
 	         - board_sdf(px - vec2(1.0, 0.0), half_size, corner_radius_px);
 	float gy = board_sdf(px + vec2(0.0, 1.0), half_size, corner_radius_px)
 	         - board_sdf(px - vec2(0.0, 1.0), half_size, corner_radius_px);
 	vec2 grad_o = normalize(vec2(gx, gy) + vec2(1e-5, 0.0));
 
-	// Hole rim: gentle meniscus tilt toward the cutout
-	float bev_hole = 0.0;
-	vec2 lat_hole = vec2(0.0);
-	if (ghost_active > 0.5) {
-		float hx = hole_sdf(px + vec2(1.0, 0.0)) - hole_sdf(px - vec2(1.0, 0.0));
-		float hy = hole_sdf(px + vec2(0.0, 1.0)) - hole_sdf(px - vec2(0.0, 1.0));
-		vec2 grad_h = -normalize(vec2(hx, hy) + vec2(1e-5, 0.0)); // toward the hole
-		bev_hole = clamp(1.0 - hs / hole_bevel_px, 0.0, 1.0);
-		bev_hole *= bev_hole; // eased ramp, gentle shoulder
-		lat_hole = grad_h * bev_hole * hole_tilt;
-	}
-
-	// ── ONE shore field: container walls + locked stack are both solid.
-	// The water laps against all of them with identical behavior.
+	// Distance to the locked stack (it is a wall too)
 	vec2 grid_pos = UV * cell_count;
 	vec2 cell_coord = floor(grid_pos);
 	float wall_sd;
 	vec2 wall_g;
 	wall_field(px, cell_coord, wall_sd, wall_g);
-	float shore_sd = min(wall_sd, -bsdf);        // distance to nearest solid
-	vec2 shore_g = wall_sd < -bsdf ? wall_g : -grad_o; // away from that solid
-	float bev_shore = clamp(1.0 - max(shore_sd, 0.0) / wall_bevel_px, 0.0, 1.0);
-	bev_shore *= bev_shore; // eased shoulder
-	vec2 lat_shore = shore_sd > 0.0 ? shore_g * bev_shore * wall_tilt : vec2(0.0);
 
-	float bev = max(bev_hole, bev_shore);
-	vec2 lat = lat_hole + lat_shore;
+	// Nearest wall of any kind, and the outward direction toward it
+	float edge_sd = min(-bsdf, wall_sd);
+	vec2 edge_dir = (-bsdf) <= wall_sd ? grad_o : -wall_g;
+
+	// Same circular bevel profile as the original outer rim, everywhere
+	float bev = clamp(1.0 - max(edge_sd, 0.0) / bevel_px, 0.0, 1.0);
+	vec2 lat = edge_dir * bev;
+
+	// Ghost hole rim: gentle meniscus tilt toward the cutout (unchanged)
+	if (ghost_active > 0.5) {
+		float hx = hole_sdf(px + vec2(1.0, 0.0)) - hole_sdf(px - vec2(1.0, 0.0));
+		float hy = hole_sdf(px + vec2(0.0, 1.0)) - hole_sdf(px - vec2(0.0, 1.0));
+		vec2 grad_h = -normalize(vec2(hx, hy) + vec2(1e-5, 0.0)); // toward the hole
+		float bev_hole = clamp(1.0 - hs / hole_bevel_px, 0.0, 1.0);
+		bev_hole *= bev_hole; // eased ramp, gentle shoulder
+		lat += grad_h * bev_hole * hole_tilt;
+		bev = max(bev, bev_hole);
+	}
 
 	// ── Water surface: sum of travelling directional waves ──
 	// Four octaves: slow swell (~300px), waves (~150px), chop (~75px),
@@ -335,12 +324,9 @@ void fragment() {
 	// Fresnel-ish bright band hugging the whole rim
 	float fresnel = pow(nxy, 3.0) * 0.16;
 
-	// Hairline at the very edge (outer rim and hole rim alike), plus a
-	// softer waterline tracing the stack contour
-	float hairline = (1.0 - smoothstep(0.0, rim_width_px, -csdf)) * 0.25;
-	if (shore_sd < 1e5) {
-		hairline += (1.0 - smoothstep(0.0, rim_width_px * 1.5, abs(shore_sd))) * 0.15;
-	}
+	// Hairline at every glass edge: outer rim, stack walls, hole rim
+	float hairline = (1.0 - smoothstep(0.0, rim_width_px,
+		min(-csdf, wall_sd))) * 0.25;
 
 	color += rim_color.rgb * rim_color.a *
 	         (spec * spec_intensity + glint + fresnel + hairline +
@@ -349,22 +335,6 @@ void fragment() {
 	// ── Faint top sheen ──
 	float sheen = smoothstep(sheen_falloff, 0.0, UV.y) * sheen_intensity;
 	color += vec3(sheen);
-
-	// ── Shoreline: container walls and locked stack alike ──
-	if (shore_sd < 1e5 && shore_sd >= 0.0) {
-		float band = 1.0 - smoothstep(0.0, wall_bevel_px, shore_sd);
-
-		// Wet contact shadow: the water darkens as it deepens at the wall
-		color *= 1.0 - band * band * shore_shadow;
-
-		// Foam: shimmering speckle band hugging the waterline
-		float fband = 1.0 - smoothstep(0.0, foam_width_px, shore_sd);
-		float grain = hash21(floor(px * 0.6));
-		float foam = fband * fband *
-			smoothstep(0.35, 1.0,
-				grain * (0.7 + 0.3 * sin(TIME * 2.5 + grain * 6.28)));
-		color += vec3(1.0) * foam * foam_intensity;
-	}
 
 	// ── Cells on top of the glass ──
 	vec2 local_uv = fract(grid_pos);
