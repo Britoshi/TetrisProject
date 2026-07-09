@@ -79,8 +79,9 @@ uniform vec4 color_7 : source_color = vec4(1.0, 0.55, 0.0, 1.0);
 uniform vec4 flash_rows = vec4(-1.0);
 uniform float flash_intensity : hint_range(0.0, 1.0) = 0.0;
 
-// ── Block emission (HDR > 1.0 so the glow post-process blooms it) ──
-uniform float block_emission : hint_range(0.0, 4.0) = 1.5;
+// ── Block glow (shader-side halo, no post-processing needed) ──
+uniform float block_emission : hint_range(0.0, 4.0) = 0.9;
+uniform float glow_radius_px : hint_range(1.0, 120.0) = 24.0;
 
 // ── Squircle SDF (identical to the button's rounded_box_sdf) ──
 float rounded_box_sdf(vec2 p, vec2 b, float r) {
@@ -140,10 +141,12 @@ void cell_sdf(vec2 rel, float hc, inout float sd, inout vec2 sg) {
 }
 
 // Distance (+gradient) from p to the nearest locked block among the
-// 3x3 cells around cc0. sd stays huge when no block is near.
-void wall_field(vec2 p, vec2 cc0, out float sd, out vec2 sg) {
+// 3x3 cells around cc0, plus that block's piece type (for glow color).
+// sd stays huge when no block is near.
+void wall_field(vec2 p, vec2 cc0, out float sd, out vec2 sg, out float ntype) {
 	sd = 1e6;
 	sg = vec2(0.0, 1.0);
+	ntype = 0.0;
 	vec2 cell_px = rect_size / cell_count;
 	float hc = min(cell_px.x, cell_px.y) * 0.5;
 	for (int j = -1; j <= 1; j++) {
@@ -159,7 +162,11 @@ void wall_field(vec2 p, vec2 cc0, out float sd, out vec2 sg) {
 				continue;
 			}
 			vec2 center = ((cc + 0.5) / cell_count - 0.5) * rect_size;
+			float prev = sd;
 			cell_sdf(p - center, hc, sd, sg);
+			if (sd < prev) {
+				ntype = ptype;
+			}
 		}
 	}
 }
@@ -180,7 +187,8 @@ void fragment() {
 	vec2 cell_coord = floor(grid_pos);
 	float wall_sd;
 	vec2 wall_g;
-	wall_field(px, cell_coord, wall_sd, wall_g);
+	float near_type;
+	wall_field(px, cell_coord, wall_sd, wall_g, near_type);
 	float sdf = max(bsdf, -wall_sd); // glass SDF: walls cut in like edges
 
 	// w: 0 at any wall, 1 in open water (button formula)
@@ -265,6 +273,13 @@ void fragment() {
 	// ── Tint the glass (button-identical) ──
 	vec3 color = mix(bg, glass_tint.rgb, glass_tint.a);
 
+	// ── Block glow: colored halo bleeding from nearby blocks ──
+	if (wall_sd < 1e5 && block_emission > 0.001) {
+		vec3 bcol = get_color(near_type).rgb;
+		float halo = exp(-max(wall_sd, 0.0) / glow_radius_px);
+		color += bcol * halo * block_emission * 0.6;
+	}
+
 	// ── Edge rim light (button-identical, traces walls too) ──
 	float rim = (1.0 - smoothstep(0.0, border_width, -sdf)) * step(sdf, 0.0);
 	rim *= rim_intensity;
@@ -301,14 +316,14 @@ void fragment() {
 
 			vec4 cc = get_color(piece_type);
 			if (cc.a > 0.01) {
-				// Piece color, pushed into HDR so bloom picks it up
-				color = cc.rgb * (1.0 + block_emission);
+				// Piece color, gently lifted (LDR-safe, no white clamp)
+				color = min(cc.rgb * 1.15, vec3(1.0));
 
 				// Flash
 				if (flash_intensity > 0.01) {
 					if (cell_coord.y == flash_rows.x || cell_coord.y == flash_rows.y ||
 					    cell_coord.y == flash_rows.z || cell_coord.y == flash_rows.w) {
-						color = mix(color, vec3(2.5), flash_intensity * 0.8);
+						color = mix(color, vec3(1.0), flash_intensity * 0.8);
 					}
 				}
 				// Subtle highlight
