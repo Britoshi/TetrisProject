@@ -99,6 +99,7 @@ var _bg_fallback_rect: ColorRect = null
 
 # Piece shader resource (shared by all piece cells)
 var _piece_shader: Shader = null
+var _game_layer: CanvasLayer = null
 
 # ── Init ──
 
@@ -288,16 +289,22 @@ func _create_board_node() -> void:
 	_board_texture = ImageTexture.create_from_image(_board_image)
 	_board_material.set_shader_parameter("board_tex", _board_texture)
 
+	# Board on its own CanvasLayer so screen_texture can see behind it
+	_game_layer = CanvasLayer.new()
+	_game_layer.name = "GameLayer"
+	_game_layer.layer = 1
+	add_child(_game_layer)
+
 	_board_rect = ColorRect.new()
 	_board_rect.name = "BoardRect"
 	_board_rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_board_rect.material = _board_material
-	add_child(_board_rect)
+	_game_layer.add_child(_board_rect)
 
 func _create_piece_cells() -> void:
 	_piece_container = Node2D.new()
 	_piece_container.name = "PieceContainer"
-	add_child(_piece_container)
+	_game_layer.add_child(_piece_container)
 
 	for i in range(4):
 		var cr := _make_piece_cell(Color.WHITE, 1.0, 0.4)
@@ -308,7 +315,7 @@ func _create_piece_cells() -> void:
 func _create_ghost_cells() -> void:
 	_ghost_container = Node2D.new()
 	_ghost_container.name = "GhostContainer"
-	add_child(_ghost_container)
+	_game_layer.add_child(_ghost_container)
 
 	for i in range(4):
 		var cr := _make_piece_cell(Color.WHITE, 0.25, 0.15)
@@ -322,44 +329,44 @@ func _create_hud_labels() -> void:
 	_score_label.name = "ScoreLabel"
 	_score_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_score_label.add_theme_color_override("font_color", Color.WHITE)
-	add_child(_score_label)
+	_game_layer.add_child(_score_label)
 
 	_lines_label = Label.new()
 	_lines_label.name = "LinesLabel"
 	_lines_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_lines_label.add_theme_color_override("font_color", Color.WHITE)
-	add_child(_lines_label)
+	_game_layer.add_child(_lines_label)
 
 	_level_label = Label.new()
 	_level_label.name = "LevelLabel"
 	_level_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_level_label.add_theme_color_override("font_color", Color.WHITE)
-	add_child(_level_label)
+	_game_layer.add_child(_level_label)
 
 	_time_label = Label.new()
 	_time_label.name = "TimeLabel"
 	_time_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_time_label.add_theme_color_override("font_color", Color.WHITE)
-	add_child(_time_label)
+	_game_layer.add_child(_time_label)
 
 	_hold_title_label = Label.new()
 	_hold_title_label.name = "HoldTitleLabel"
 	_hold_title_label.text = "Hold"
 	_hold_title_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_hold_title_label.add_theme_color_override("font_color", Color.WHITE)
-	add_child(_hold_title_label)
+	_game_layer.add_child(_hold_title_label)
 
 	_next_title_label = Label.new()
 	_next_title_label.name = "NextTitleLabel"
 	_next_title_label.text = "Next:"
 	_next_title_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_next_title_label.add_theme_color_override("font_color", Color.WHITE)
-	add_child(_next_title_label)
+	_game_layer.add_child(_next_title_label)
 
 func _create_hold_preview() -> void:
 	_hold_container = Node2D.new()
 	_hold_container.name = "HoldPreview"
-	add_child(_hold_container)
+	_game_layer.add_child(_hold_container)
 	for i in range(4):
 		var cr := _make_piece_cell(Color.GRAY, 1.0, 0.2, 0)
 		_hold_container.add_child(cr)
@@ -369,7 +376,7 @@ func _create_hold_preview() -> void:
 func _create_next_preview() -> void:
 	_next_container = Node2D.new()
 	_next_container.name = "NextPreview"
-	add_child(_next_container)
+	_game_layer.add_child(_next_container)
 	for i in range(3):
 		var sub := Node2D.new()
 		sub.name = "NextPiece%d" % i
