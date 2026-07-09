@@ -1,15 +1,21 @@
 shader_type canvas_item;
 
 // board.gdshader — Full-board shader reading a 10×22 data texture.
-// Outputs flat piece colors with subtle grid gaps between cells.
+// Liquid glass background (screen-space blur + dark tint) for empty cells.
+// Flat piece colors for occupied cells. Grid gaps between cells.
 // Line clear flash on specific rows via uniforms.
 
 uniform sampler2D board_tex : repeat_disable, filter_nearest;
+uniform sampler2D screen_texture : hint_screen_texture, filter_linear_mipmap;
 
 // Grid
 uniform vec2 cell_count = vec2(10.0, 20.0);
 uniform float vanish_offset = 2.0;
 uniform float cell_padding : hint_range(0.0, 0.2) = 0.04;
+
+// Liquid glass background
+uniform float glass_blur : hint_range(0.0, 8.0) = 3.0;
+uniform vec4 glass_tint : source_color = vec4(0.04, 0.04, 0.07, 0.85);
 
 // Piece colors (set from Constants.COLORS)
 uniform vec4 color_empty : source_color = vec4(0.05, 0.05, 0.08, 1.0);
@@ -22,7 +28,7 @@ uniform vec4 color_6 : source_color = vec4(0.0, 0.47, 0.95, 1.0);
 uniform vec4 color_7 : source_color = vec4(1.0, 0.55, 0.0, 1.0);
 
 // Grid line & border
-uniform vec4 grid_color : source_color = vec4(0.02, 0.02, 0.04, 1.0);
+uniform vec4 grid_color : source_color = vec4(0.0, 0.0, 0.0, 0.3);
 
 // Line clear flash
 uniform vec4 flash_rows = vec4(-1.0);
@@ -44,17 +50,21 @@ void fragment() {
 	vec2 cell_coord = floor(grid_pos);
 	vec2 local_uv = fract(grid_pos);
 
-	// Cell bounds check — use if/else chain instead of return (Godot restriction)
+	// Screen-space glass background for empty areas
+	vec3 glass_bg = textureLod(screen_texture, SCREEN_UV, glass_blur).rgb;
+	glass_bg = mix(glass_bg, glass_tint.rgb, glass_tint.a);
+
+	// Cell bounds check
 	if (cell_coord.x < 0.0 || cell_coord.x >= cell_count.x ||
 	    cell_coord.y < 0.0 || cell_coord.y >= cell_count.y) {
-		COLOR = color_empty;
+		COLOR = vec4(glass_bg, 1.0);
 	} else {
-		// Padding creates grid lines
+		// Padding creates grid lines (glass shows through)
 		vec2 pad_min = vec2(cell_padding);
 		vec2 pad_max = vec2(1.0 - cell_padding);
 		if (local_uv.x < pad_min.x || local_uv.x > pad_max.x ||
 		    local_uv.y < pad_min.y || local_uv.y > pad_max.y) {
-			COLOR = grid_color;
+			COLOR = vec4(mix(glass_bg, grid_color.rgb, grid_color.a), 1.0);
 		} else {
 			// Sample data texture — piece type
 			float tex_u = cell_coord.x / 10.0;
