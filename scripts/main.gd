@@ -3,7 +3,7 @@
 extends Node2D
 
 # ── Game state ──
-enum State { SPRINT_MENU, PLAYING, LINE_CLEAR, GAME_OVER, SPRINT_COMPLETE }
+enum State { SPRINT_MENU, PLAYING, LINE_CLEAR, GAME_OVER, SPRINT_COMPLETE, REPLAY }
 var state: int = State.SPRINT_MENU
 
 # ── Core objects ──
@@ -27,6 +27,22 @@ var _sprint_new_record: bool = false      # true if this run set a record
 var _sprint_menu: Control = null          # MenuRoot of scenes/sprint_menu.tscn
 var _mobile_controls: Control = null      # ButtonPanel of scenes/mobile_controls.tscn
 var _game_settings: Node = null           # GameSettings autoload
+var _game_history: Node = null            # GameHistory autoload
+
+# ── Replay recording ──
+var _replay: Replay = null
+var _recording: bool = false
+var _board_hex_cache: String = ""         # current board as Replay hex (set in _update_board_texture)
+
+# ── Replay playback ──
+var _replay_playing: Replay = null
+var _replay_clock: float = 0.0
+var _replay_speed: float = 1.0
+var _replay_paused: bool = false
+var _replay_hud: Control = null           # ReplayRoot of scenes/replay_hud.tscn
+var _replay_last_ver: int = -1
+var _replay_return_to_history: bool = false
+var _history_screen: Control = null       # ScreenRoot of scenes/history_screen.tscn
 
 # ── Hold (stash) ──
 var _held_piece_type: int = Constants.PieceType.EMPTY
@@ -142,8 +158,52 @@ func _ready() -> void:
 	_game_settings = get_node_or_null("/root/GameSettings")
 	if _game_settings:
 		_game_settings.changed.connect(_update_board_texture)
+	_game_history = get_node_or_null("/root/GameHistory")
+
+	# History screen + replay HUD (start hidden)
+	_history_screen = get_node_or_null("HistoryScreen/ScreenRoot")
+	if _history_screen:
+		_history_screen.replay_requested.connect(_on_history_replay_requested)
+		_history_screen.closed.connect(_on_history_closed)
+		_history_screen.visible = false
+	_replay_hud = get_node_or_null("ReplayHud/HudRoot")
+	if _replay_hud:
+		_replay_hud.toggle_pause.connect(replay_toggle_pause)
+		_replay_hud.restart.connect(replay_restart)
+		_replay_hud.cycle_speed.connect(replay_cycle_speed)
+		_replay_hud.exit_pressed.connect(exit_replay)
+		_replay_hud.scrubbed.connect(replay_scrub)
+		_replay_hud.visible = false
+
+	if _sprint_menu:
+		_sprint_menu.history_requested.connect(_open_history)
+
 	_show_menu()
-	print("=== _ready() done — state: SPRINT_MENU ===")
+
+
+func _open_history() -> void:
+	if _history_screen == null:
+		return
+	_sprint_menu.get_parent().visible = false
+	_history_screen.visible = true
+	_history_screen.refresh()
+
+
+func _on_history_closed() -> void:
+	if _history_screen:
+		_history_screen.visible = false
+	_sprint_menu.get_parent().visible = true
+
+
+func _on_history_replay_requested(index: int) -> void:
+	if _game_history == null:
+		return
+	var replay = _game_history.get_replay(index)
+	if replay == null:
+		return
+	if _history_screen:
+		_history_screen.visible = false
+	start_replay(replay, true)
 
 func _setup_glow_environment() -> void:
 	"""Bloom for emissive blocks. glow_bloom MUST stay 0.0 — any higher
@@ -215,6 +275,13 @@ func _input(event: InputEvent) -> void:
 		State.SPRINT_COMPLETE:
 			if (event is InputEventKey and event.pressed) or (event is InputEventScreenTouch and event.pressed):
 				_restart()
+		State.REPLAY:
+			if event is InputEventKey and event.pressed and not event.echo:
+				match event.keycode:
+					KEY_SPACE: replay_toggle_pause()
+					KEY_R: replay_restart()
+					KEY_S: replay_cycle_speed()
+					KEY_ESCAPE: exit_replay()
 
 func _update_layout() -> void:
 	var vp_size := get_viewport_rect().size
@@ -540,12 +607,17 @@ func _update_board_texture() -> void:
 	if _board_image == null or board == null:
 		return
 	var style: int = _game_settings.block_style if _game_settings else 1
+	var hex_types := ""
+	var hex_masks := ""
 	for r in range(Constants.ROWS):
 		for c in range(Constants.COLS):
-			var val: float = float(board.get_cell(c, r))
-			var mask: float = float(board.get_conn_mask(c, r, style))
-			_board_image.set_pixel(c, r, Color(val, mask, 0, 1))
+			var val: int = board.get_cell(c, r)
+			var mask: int = board.get_conn_mask(c, r, style)
+			_board_image.set_pixel(c, r, Color(float(val), float(mask), 0, 1))
+			hex_types += "%x" % (maxi(val, 0) & 0xF)
+			hex_masks += "%x" % (mask & 0xF)
 	_board_texture.update(_board_image)
+	_board_hex_cache = hex_types + hex_masks
 
 func _set_game_nodes_visible(v: bool) -> void:
 	"""Show/hide all game rendering nodes (board, pieces, HUD, previews)."""
@@ -565,14 +637,17 @@ func _set_game_nodes_visible(v: bool) -> void:
 	if _hold_container:
 		_hold_container.visible = v
 	if _next_container:
-		_next_container.visible = v
+		# Next queue isn't part of a replay's recorded state — keep it hidden
+		_next_container.visible = v and state != State.REPLAY
+	if _next_title_label:
+		_next_title_label.visible = v and state != State.REPLAY
 	if _bg_fallback_rect:
 		_bg_fallback_rect.visible = v and not _bg_ok
 
 
 func _update_piece_positions() -> void:
 	"""Position active piece cells each frame."""
-	if state != State.PLAYING or controller.is_locked:
+	if (state != State.PLAYING and state != State.REPLAY) or controller.is_locked:
 		_piece_container.visible = false
 		return
 
@@ -603,7 +678,7 @@ func _update_ghost_positions() -> void:
 	_ghost_container.visible = false
 	if _board_material == null:
 		return
-	if state != State.PLAYING or controller.is_locked:
+	if (state != State.PLAYING and state != State.REPLAY) or controller.is_locked:
 		_board_material.set_shader_parameter("ghost_active", 0.0)
 		return
 
@@ -834,6 +909,7 @@ func _spawn_next_piece() -> void:
 	var p_type: int = bag.next_piece()
 	print("  spawn_next_piece: type=", p_type)
 	if not controller.spawn(p_type):
+		_end_game("topout")
 		state = State.GAME_OVER
 		print("  SPAWN FAILED — GAME OVER")
 	else:
@@ -879,6 +955,15 @@ func _process(delta: float) -> void:
 			_process_game_over(delta)
 		State.SPRINT_COMPLETE:
 			_set_game_nodes_visible(false)
+		State.REPLAY:
+			_set_game_nodes_visible(true)
+			_process_replay(delta)
+
+	# ── Replay recording: snapshot the visible state (dedups internally) ──
+	if _recording and (state == State.PLAYING or state == State.LINE_CLEAR):
+		_replay.capture(sprint_time, controller.piece_type,
+			controller.position.x, controller.position.y, controller.rotation,
+			_held_piece_type, _board_hex_cache, lines_cleared, score)
 
 	# ── Shader-based rendering updates (every frame) ──
 	_update_splashes(delta)
@@ -965,6 +1050,136 @@ func _process_playing(delta: float) -> void:
 	else:
 		controller.lock_timer = 0.0
 
+# ── Replay playback ──
+
+func start_replay(replay: Replay, return_to_history: bool = true) -> void:
+	"""Play back a recorded game. Drives the normal render nodes from the
+	recorded state timeline (see scripts/replay.gd)."""
+	if replay == null or replay.frames.is_empty():
+		return
+	_recording = false
+	_replay_playing = replay
+	_replay_clock = 0.0
+	_replay_speed = 1.0
+	_replay_paused = false
+	_replay_last_ver = -1
+	_replay_return_to_history = return_to_history
+
+	board = Board.new()
+	controller.board = board
+	sprint_target = replay.mode
+	score = 0
+	lines_cleared = 0
+	level = maxi(1, replay.level)
+	_held_piece_type = Constants.PieceType.EMPTY
+
+	state = State.REPLAY
+	_sprint_menu.get_parent().visible = false
+	if _mobile_controls:
+		_mobile_controls.set_menu_mode(true)
+	_position_all_nodes()
+	# Next-queue isn't recorded; hide it rather than show stale pieces
+	if _next_container:
+		_next_container.visible = false
+	if _next_title_label:
+		_next_title_label.visible = false
+	_apply_replay_frame(0.0)
+	_show_replay_hud(true)
+	queue_redraw()  # clear any stale game-over / sprint-complete overlay
+
+
+func _process_replay(delta: float) -> void:
+	if _replay_playing == null:
+		return
+	if not _replay_paused:
+		_replay_clock += delta * _replay_speed
+	var dur: float = _replay_playing.duration
+	if _replay_clock >= dur:
+		_replay_clock = dur
+		_replay_paused = true  # freeze on the final frame
+	_apply_replay_frame(_replay_clock)
+	if _replay_hud and _replay_hud.has_method("update_progress"):
+		_replay_hud.update_progress(_replay_clock, dur, _replay_paused, _replay_speed)
+
+
+func _apply_replay_frame(t: float) -> void:
+	var f: Array = _replay_playing.frame_at(t)
+	if f.is_empty():
+		return
+	var ver: int = int(f[6])
+	if ver != _replay_last_ver:
+		_apply_board_snapshot(_replay_playing.decode_types(ver),
+			_replay_playing.decode_masks(ver))
+		_replay_last_ver = ver
+	controller.piece_type = int(f[4])
+	controller.position = Vector2i(int(f[1]), int(f[2]))
+	controller.rotation = int(f[3])
+	controller.is_locked = false
+	_held_piece_type = int(f[5])
+	lines_cleared = int(f[7])
+	score = int(f[8])
+	sprint_time = t
+	_update_hold_preview()
+
+
+func _apply_board_snapshot(types: PackedInt32Array, masks: PackedInt32Array) -> void:
+	"""Restore board grid (for ghost calc) + texture (exact fused look)."""
+	if _board_image == null or board == null:
+		return
+	for r in range(Constants.ROWS):
+		for c in range(Constants.COLS):
+			var idx: int = r * Constants.COLS + c
+			var tp: int = types[idx]
+			board.grid[r][c] = tp
+			_board_image.set_pixel(c, r, Color(float(tp), float(masks[idx]), 0, 1))
+	_board_texture.update(_board_image)
+
+
+func replay_toggle_pause() -> void:
+	if _replay_clock >= _replay_playing.duration:
+		_replay_clock = 0.0  # restart if paused at the end
+	_replay_paused = not _replay_paused
+
+
+func replay_restart() -> void:
+	_replay_clock = 0.0
+	_replay_last_ver = -1
+	_replay_paused = false
+
+
+func replay_cycle_speed() -> void:
+	var speeds := [1.0, 2.0, 4.0, 0.5]
+	var i: int = speeds.find(_replay_speed)
+	_replay_speed = speeds[(i + 1) % speeds.size()]
+
+
+func replay_scrub(fraction: float) -> void:
+	_replay_clock = clampf(fraction, 0.0, 1.0) * _replay_playing.duration
+	_replay_last_ver = -1
+
+
+func exit_replay() -> void:
+	_replay_playing = null
+	_show_replay_hud(false)
+	if _next_container:
+		_next_container.visible = true
+	if _next_title_label:
+		_next_title_label.visible = true
+	if _replay_return_to_history and _history_screen:
+		_history_screen.visible = true
+		state = State.SPRINT_MENU
+		_set_game_nodes_visible(false)
+		if _history_screen.has_method("refresh"):
+			_history_screen.refresh()
+	else:
+		_show_menu()
+
+
+func _show_replay_hud(on: bool) -> void:
+	if _replay_hud:
+		_replay_hud.visible = on
+
+
 func _process_line_clear(delta: float) -> void:
 	line_clear_timer -= delta
 	# Flash animation: pulse intensity
@@ -1029,6 +1244,7 @@ func _try_hold() -> void:
 		_hold_locked = true
 		_update_hold_preview()
 		if not controller.spawn(swap_type):
+			_end_game("topout")
 			state = State.GAME_OVER
 func _try_gravity() -> bool:
 	return controller.move_down()
@@ -1069,6 +1285,7 @@ func _lock_piece(splash_amp: float = 1.0) -> void:
 
 	# Check game over (piece locked in vanish zone)
 	if board.is_game_over():
+		_end_game("topout")
 		state = State.GAME_OVER
 		print("GAME OVER — vanish zone breached")
 		return
@@ -1146,6 +1363,10 @@ func _start_sprint(target: int) -> void:
 		_mobile_controls.set_menu_mode(false)
 	_restart_game_only()
 	_position_all_nodes()  # sprint HUD adds the Time row — shift Next below it
+	# Begin recording this run
+	_replay = Replay.new()
+	_replay.start()
+	_recording = true
 
 func _finish_sprint() -> void:
 	"""Called when lines_cleared >= sprint_target. Checks/saves record."""
@@ -1154,7 +1375,19 @@ func _finish_sprint() -> void:
 	if _sprint_new_record:
 		sprint_records[sprint_target] = sprint_time
 		_save_sprint_records()
+	_end_game("complete")
 	state = State.SPRINT_COMPLETE
+
+func _end_game(result: String) -> void:
+	"""Finalize the in-progress replay and persist it to history."""
+	if not _recording or _replay == null:
+		return
+	_recording = false
+	var date := int(Time.get_unix_time_from_system())
+	_replay.finish(sprint_target, result, score, lines_cleared, level,
+		sprint_time, date, _sprint_new_record)
+	if _game_history:
+		_game_history.add_game(_replay)
 
 func _format_time(seconds: float) -> String:
 	if seconds < 60.0:

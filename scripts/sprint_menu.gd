@@ -7,6 +7,7 @@
 extends Control
 
 signal target_selected(target: int)
+signal history_requested
 
 const SHADER_PATH := "res://shaders/liquid_glass.gdshader"
 const THEME_NAME := "ios_liquid_glass"
@@ -35,6 +36,8 @@ var _theme_data: Dictionary = {}
 
 var _pressed_idx: int = -1
 var _press_touch: int = -1
+var _hist_index: int = -1   # index in the button arrays of the History button
+var _shader_res: Shader = null
 
 
 func _ready() -> void:
@@ -72,41 +75,47 @@ func _build() -> void:
 	_subtitle = _make_label("Select Target", 18, Color(1, 1, 1, 0.65), self)
 	_hint = _make_label("Press 1–4 or tap a target", 13, Color(1, 1, 1, 0.4), self)
 
-	var shader_res := load(SHADER_PATH) as Shader
-	if shader_res == null:
+	_shader_res = load(SHADER_PATH) as Shader
+	if _shader_res == null:
 		push_error("Failed to load button shader: " + SHADER_PATH)
 
 	for i in range(_targets.size()):
-		# Shadow panel (container)
-		var panel := Panel.new()
-		panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		add_child(panel)
-		_btn_panels.append(panel)
+		_add_glass_button("%d Lines" % _targets[i], BTN_TINTS[i % BTN_TINTS.size()])
 
-		# Glass body
-		var body := ColorRect.new()
-		body.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		panel.add_child(body)
-		_btn_bodies.append(body)
+	# History / replays button (extra, neutral tint) reuses all the press
+	# machinery — it's just the last entry in the button arrays.
+	_add_glass_button("History & Replays", Color(0.30, 0.32, 0.42))
+	_hist_index = _btn_panels.size() - 1
 
-		var mat := ShaderMaterial.new()
-		if shader_res:
-			mat.shader = shader_res.duplicate()
-		for key in _theme_data:
-			if key == "label" or key == "tint_alpha":
-				continue
-			mat.set_shader_parameter(key, _theme_data[key])
-		var c := BTN_TINTS[i % BTN_TINTS.size()]
-		mat.set_shader_parameter("tint", Color(c.r, c.g, c.b, _theme_data.get("tint_alpha", 0.55)))
-		mat.set_shader_parameter("pressed", 0.0)
-		mat.set_shader_parameter("corner_radius", BTN_CORNER)
-		body.material = mat
-		_btn_shaders.append(mat)
+	_btn_rects.resize(_btn_panels.size())
 
-		_btn_labels.append(_make_label("%d Lines" % _targets[i], 22, Color.WHITE, panel))
-		_btn_subs.append(_make_label("", 13, Color(1, 1, 1, 0.6), panel))
 
-	_btn_rects.resize(_targets.size())
+func _add_glass_button(label: String, tint: Color) -> void:
+	var panel := Panel.new()
+	panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(panel)
+	_btn_panels.append(panel)
+
+	var body := ColorRect.new()
+	body.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	panel.add_child(body)
+	_btn_bodies.append(body)
+
+	var mat := ShaderMaterial.new()
+	if _shader_res:
+		mat.shader = _shader_res.duplicate()
+	for key in _theme_data:
+		if key == "label" or key == "tint_alpha":
+			continue
+		mat.set_shader_parameter(key, _theme_data[key])
+	mat.set_shader_parameter("tint", Color(tint.r, tint.g, tint.b, _theme_data.get("tint_alpha", 0.55)))
+	mat.set_shader_parameter("pressed", 0.0)
+	mat.set_shader_parameter("corner_radius", BTN_CORNER)
+	body.material = mat
+	_btn_shaders.append(mat)
+
+	_btn_labels.append(_make_label(label, 22, Color.WHITE, panel))
+	_btn_subs.append(_make_label("", 13, Color(1, 1, 1, 0.6), panel))
 
 
 func _make_label(text: String, fs: int, color: Color, parent: Node) -> Label:
@@ -154,11 +163,14 @@ func _layout() -> void:
 	var cx := size.x / 2.0
 	var btn_w := minf(size.x * 0.62, 340.0)
 	var btn_h := 64.0
+	var hist_h := 50.0
 	var gap := 16.0
+	var extra_gap := 10.0   # a little breathing room before the History button
 	var title_fs := clampi(int(size.x * 0.055), 28, 46)
 	var title_h := title_fs + 12.0
 	var sub_h := 26.0
-	var total_btn := n * btn_h + (n - 1) * gap
+	# n includes the History button (last) — sized separately
+	var total_btn := (n - 1) * btn_h + (n - 2) * gap + extra_gap + hist_h
 	var block_h := title_h + 4.0 + sub_h + 30.0 + total_btn + 28.0 + 18.0
 	var top := maxf((size.y - block_h) / 2.0, size.y * 0.04)
 
@@ -171,24 +183,29 @@ func _layout() -> void:
 
 	var y := top + title_h + 4.0 + sub_h + 30.0
 	for i in range(n):
-		var rect := Rect2(cx - btn_w / 2.0, y, btn_w, btn_h)
+		var is_hist := i == _hist_index
+		var h := hist_h if is_hist else btn_h
+		if is_hist:
+			y += extra_gap
+		var rect := Rect2(cx - btn_w / 2.0, y, btn_w, h)
 		_btn_rects[i] = rect
 
 		_btn_panels[i].position = rect.position
 		_btn_panels[i].size = rect.size
 		_btn_panels[i].add_theme_stylebox_override("panel",
-			_make_shadow_style(int(btn_h * 0.24)))
+			_make_shadow_style(int(h * 0.24)))
 
 		_btn_bodies[i].position = Vector2.ZERO
 		_btn_bodies[i].size = rect.size
 
 		# Main label sits slightly high; best-time line hugs the bottom
 		_btn_labels[i].position = Vector2.ZERO
-		_btn_labels[i].size = Vector2(btn_w, btn_h - 14.0)
-		_btn_subs[i].position = Vector2(0, btn_h - 24.0)
+		_btn_labels[i].size = Vector2(btn_w, h - (14.0 if not is_hist else 0.0))
+		_btn_labels[i].add_theme_font_size_override("font_size", 22 if not is_hist else 19)
+		_btn_subs[i].position = Vector2(0, h - 24.0)
 		_btn_subs[i].size = Vector2(btn_w, 18.0)
 
-		y += btn_h + gap
+		y += h + gap
 
 	_hint.position = Vector2(0, y + 10.0)
 	_hint.size = Vector2(size.x, 18.0)
@@ -221,7 +238,10 @@ func _input(event: InputEvent) -> void:
 			_press_touch = -1
 			if _btn_rects[i].has_point(event.position):
 				get_viewport().set_input_as_handled()
-				target_selected.emit(_targets[i])
+				if i == _hist_index:
+					history_requested.emit()
+				else:
+					target_selected.emit(_targets[i])
 	elif event is InputEventScreenDrag:
 		# Sliding off the button cancels the press
 		if _pressed_idx >= 0 and event.index == _press_touch \

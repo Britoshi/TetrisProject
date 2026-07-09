@@ -19,6 +19,7 @@ config/icon="res://icon.svg"
 
 PieceData="*res://autoload/piece_data.gd"
 GameSettings="*res://autoload/game_settings.gd"
+GameHistory="*res://autoload/game_history.gd"
 
 [input_devices]
 
