@@ -474,8 +474,10 @@ void fragment() {
 			vec3 tile_col = mix(tbg, piece_col, block_tint_alpha);
 
 			// Rim stroke in HDR piece color: the bloom traces the merged
-			// outline of the whole piece instead of flooding the face
-			float rimc = 1.0 - smoothstep(0.0, 3.0, abs(tile_sdf));
+			// outline of the whole piece. Interior-side band only — the
+			// union SDF overestimates EXTERIOR distance at reentrant
+			// (concave) corners, which breaks a two-sided abs() rim there.
+			float rimc = (1.0 - smoothstep(0.0, 3.5, -tile_sdf)) * step(tile_sdf, 0.0);
 			tile_col = mix(tile_col, piece_col * (1.0 + block_emission), rimc * 0.85);
 
 			// Top sheen — only on cells whose top edge is exposed
