@@ -423,11 +423,11 @@ func _update_piece_positions() -> void:
 	var cs: int = _cell_size
 	var bx: int = _board_x
 	var by: int = _board_y
-	var cells := controller.get_absolute_cells()
-	var color := Constants.COLORS.get(controller.piece_type, Color.GRAY)
+	var cells: Array[Vector2i] = controller.get_absolute_cells()
+	var color: Color = Constants.COLORS.get(controller.piece_type, Color.GRAY) as Color
 
 	_piece_container.visible = true
-	var idx := 0
+	var idx: int = 0
 	for cell in cells:
 		if idx >= _piece_cells.size():
 			break
@@ -451,11 +451,11 @@ func _update_ghost_positions() -> void:
 	var by: int = _board_y
 	var ghost_y: int = controller.get_ghost_y()
 	var ghost_pos := Vector2i(controller.position.x, ghost_y)
-	var cells := controller.get_cells_at(ghost_pos, controller.rotation)
-	var color := Constants.COLORS.get(controller.piece_type, Color.GRAY)
+	var cells: Array[Vector2i] = controller.get_cells_at(ghost_pos, controller.rotation)
+	var color: Color = Constants.COLORS.get(controller.piece_type, Color.GRAY) as Color
 
 	_ghost_container.visible = true
-	var idx := 0
+	var idx: int = 0
 	for cell in cells:
 		if idx >= _ghost_cells.size():
 			break
@@ -492,8 +492,8 @@ func _update_hold_preview() -> void:
 		return
 
 	var preview_cs: int = maxi(4, _cell_size / 2)
-	var offsets := piece_data.CELLS[_held_piece_type][0]
-	var color := Constants.COLORS.get(_held_piece_type, Color.GRAY)
+	var offsets: Array[Vector2i] = piece_data.CELLS[_held_piece_type][0] as Array[Vector2i]
+	var color: Color = Constants.COLORS.get(_held_piece_type, Color.GRAY) as Color
 
 	for i in range(4):
 		if i >= _hold_cells.size():
@@ -514,13 +514,13 @@ func _update_next_preview() -> void:
 		return
 
 	var preview_cs: int = maxi(4, _cell_size / 2)
-	var next_pieces := bag.peek_next(3)
+	var next_pieces: Array = bag.peek_next(3)
 
 	for i in range(3):
 		_next_sub_containers[i].visible = true
 		var p_type: int = next_pieces[i]
 		var color := Constants.COLORS.get(p_type, Color.GRAY)
-		var offsets := piece_data.CELLS[p_type][0]
+		var offsets: Array[Vector2i] = piece_data.CELLS[p_type][0] as Array[Vector2i]
 		for j in range(4):
 			if j >= _next_cells[i].size():
 				break
@@ -1086,5 +1086,3 @@ func _draw_sprint_complete(font: Font, font_s: int, font_m: int, font_l: int,
 	draw_string(font, Vector2(board_center_x, hint_y),
 		"Tap or press any key to continue",
 		HORIZONTAL_ALIGNMENT_CENTER, -1, font_s, Color(1.0, 1.0, 1.0, 0.5))
-
-
