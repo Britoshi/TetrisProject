@@ -271,6 +271,12 @@ func _create_board_node() -> void:
 	_board_material = ShaderMaterial.new()
 	_board_material.shader = shader_res
 
+	# Create game layer first (everything goes here)
+	_game_layer = CanvasLayer.new()
+	_game_layer.name = "GameLayer"
+	_game_layer.layer = 1
+	add_child(_game_layer)
+
 	# ── Background capture via SubViewport ──
 	_bg_viewport = SubViewport.new()
 	var bg_viewport := _bg_viewport
@@ -286,9 +292,9 @@ func _create_board_node() -> void:
 	bg_copy.name = "BgCopy"
 	bg_copy.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_COVERED
 	bg_copy.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	var bg_tex := load("res://videos/azure-horizon.png") as Texture2D
-	if bg_tex:
-		bg_copy.texture = bg_tex
+	var bg_tex_res := load("res://videos/azure-horizon.png") as Texture2D
+	if bg_tex_res:
+		bg_copy.texture = bg_tex_res
 	else:
 		bg_copy.color = Color(0.1, 0.1, 0.15)
 	bg_viewport.add_child(bg_copy)
@@ -313,7 +319,6 @@ func _create_board_node() -> void:
 	# Colors from Constants.COLORS
 	var c := Constants.COLORS
 	_board_material.set_shader_parameter("color_1", c[Constants.PieceType.I])
-	_board_material.set_shader_parameter("color_1", c[Constants.PieceType.I])
 	_board_material.set_shader_parameter("color_2", c[Constants.PieceType.O])
 	_board_material.set_shader_parameter("color_3", c[Constants.PieceType.T])
 	_board_material.set_shader_parameter("color_4", c[Constants.PieceType.S])
@@ -327,12 +332,6 @@ func _create_board_node() -> void:
 	_board_image.fill(Color(0, 0, 0, 1))  # all empty
 	_board_texture = ImageTexture.create_from_image(_board_image)
 	_board_material.set_shader_parameter("board_tex", _board_texture)
-
-	# Board on its own CanvasLayer so screen_texture can see behind it
-	_game_layer = CanvasLayer.new()
-	_game_layer.name = "GameLayer"
-	_game_layer.layer = 1
-	add_child(_game_layer)
 
 	_board_rect = ColorRect.new()
 	_board_rect.name = "BoardRect"
