@@ -24,6 +24,12 @@ uniform vec4 border_color : source_color = vec4(1.0, 1.0, 1.0, 0.22);
 uniform float border_px : hint_range(0.0, 6.0) = 1.5;
 uniform float warp : hint_range(0.0, 20.0) = 6.0;
 
+// The main board, so panels near it bridge INTO the board and the whole thing
+// reads as one connected piece of glass. hw<0 disables it. The board interior
+// is masked out (the board draws itself); only the connecting neck is added.
+uniform vec4 board_rect = vec4(0.0, 0.0, -1.0, -1.0); // (cx, cy, half_w, half_h) px
+uniform float board_corner = 40.0;
+
 // ── Edit-mode uniforms (idle defaults = fully inert) ──
 uniform vec4 sel_rect = vec4(0.0, 0.0, -1.0, -1.0); // selected panel (cx,cy,hw,hh); hw<0 = none
 uniform float sel_glow = 0.0;                        // 0..1 highlight strength
@@ -57,10 +63,31 @@ float field(vec2 px) {
 	return d;
 }
 
+// Signed distance to the board's rounded rect (large positive if no board).
+float board_sdf(vec2 px) {
+	if (board_rect.z <= 0.0) {
+		return 1e9;
+	}
+	return rbox(px - board_rect.xy, board_rect.zw, board_corner);
+}
+
+// The fully merged surface: panels smooth-unioned with the board, so a panel
+// close to the board grows a liquid neck into it.
+float field_all(vec2 px) {
+	return smin(field(px), board_sdf(px), merge_k);
+}
+
 void fragment() {
 	vec2 px = origin_px + UV * rect_px;
-	float d = field(px);
-	float shape = clamp(0.5 - d, 0.0, 1.0);
+	float dp = field(px);                          // panels only (always drawn)
+	float shape_p = clamp(0.5 - dp, 0.0, 1.0);
+
+	// Merge panels with the board, but keep the board interior masked out (the
+	// board renders itself there) — we only add the connecting neck.
+	float d = field_all(px);
+	float bd = board_sdf(px);
+	float board_mask = smoothstep(-1.0, 1.5, bd); // 0 inside board, 1 outside
+	float shape = max(shape_p, clamp(0.5 - d, 0.0, 1.0) * board_mask);
 
 	// Selection glow: a bright edge ring plus a soft halo that spills just
 	// outside the selected panel (so the highlight reads as a ring around it).
@@ -82,8 +109,8 @@ void fragment() {
 		// Surface normal of the merged field (forward differences) — correct
 		// outward direction everywhere, including across a merge bridge.
 		float e = 1.5;
-		float dx = field(px + vec2(e, 0.0)) - d;
-		float dy = field(px + vec2(0.0, e)) - d;
+		float dx = field_all(px + vec2(e, 0.0)) - d;
+		float dy = field_all(px + vec2(0.0, e)) - d;
 		vec2 nrm = normalize(vec2(dx, dy) + vec2(1e-6));
 
 		// Edge lens: bend the frosted background outward, strongest at the rim.

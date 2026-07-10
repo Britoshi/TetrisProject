@@ -961,6 +961,7 @@ func _update_hud_glass() -> void:
 			panels.append(p)
 	if panels.is_empty():
 		_hud_glass.visible = false
+		_set_board_param("hud_active", 0.0)
 		return
 	_hud_glass.visible = true
 
@@ -992,6 +993,30 @@ func _update_hud_glass() -> void:
 	m.set_shader_parameter("rect_px", _hud_glass.size)
 	m.set_shader_parameter("rects", rects)
 	m.set_shader_parameter("corner_px", 18.0)
+	# The board itself joins the union so nearby panels grow a neck into it and
+	# the whole HUD reads as one connected sheet of glass.
+	if _board_rect:
+		var bc: Vector2 = _board_rect.position + _board_rect.size * 0.5
+		m.set_shader_parameter("board_rect",
+			Vector4(bc.x, bc.y, _board_rect.size.x * 0.5, _board_rect.size.y * 0.5))
+		m.set_shader_parameter("board_corner", float(_cell_size) * 0.8)
+		# Mirror the panel rects to the board (board-center-relative) so it drops
+		# its rim where a panel fuses on.
+		var brects: Array = []
+		for i in range(6):
+			if i < panels.size():
+				var bp: ColorRect = panels[i]
+				var pc: Vector2 = bp.position + bp.size * 0.5 - bc
+				brects.append(Vector4(pc.x, pc.y, bp.size.x * 0.5, bp.size.y * 0.5))
+			else:
+				brects.append(Vector4(-99999.0, -99999.0, 0.01, 0.01))
+		_set_board_param("hud_rects", brects)
+		_set_board_param("hud_active", 1.0)
+		_set_board_param("hud_corner_px", 18.0)
+		_set_board_param("hud_merge_k", 30.0)
+	else:
+		m.set_shader_parameter("board_rect", Vector4(0.0, 0.0, -1.0, -1.0))
+		_set_board_param("hud_active", 0.0)
 
 func _make_glass_panel(pname: String) -> ColorRect:
 	# Invisible layout holder: it carries a panel's position/size only; the

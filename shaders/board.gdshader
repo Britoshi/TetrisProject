@@ -40,6 +40,15 @@ uniform float border_width : hint_range(0.0, 8.0) = 1.5;
 uniform vec4 border_color : source_color = vec4(1.0, 1.0, 1.0, 0.45);
 uniform float rim_intensity : hint_range(0.0, 1.0) = 0.5;
 
+// ── HUD panels fused to the board ──
+// Where a panel meets the board edge, the board drops its own rim/border so
+// the two read as one connected sheet of glass. Rects are board-center-
+// relative px, matching this shader's `px`.
+uniform vec4 hud_rects[6];
+uniform float hud_active = 0.0;
+uniform float hud_corner_px = 18.0;
+uniform float hud_merge_k = 30.0;
+
 // ── Chromatic aberration (button-identical) ──
 uniform float chromatic_strength : hint_range(0.0, 5.0) = 3.0;
 
@@ -110,6 +119,20 @@ float rounded_box_sdf(vec2 p, vec2 b, float r) {
 	vec2 corner = max(q, vec2(0.0));
 	float corner_dist = pow(pow(corner.x, 2.5) + pow(corner.y, 2.5), 1.0 / 2.5);
 	return d + corner_dist - r;
+}
+
+float _smin(float a, float b, float k) {
+	float h = clamp(0.5 + 0.5 * (b - a) / max(k, 1e-4), 0.0, 1.0);
+	return mix(b, a, h) - k * h * (1.0 - h);
+}
+
+// Smooth-union distance to the HUD panels (board-center-relative px).
+float hud_union_sdf(vec2 p) {
+	float d = 1e9;
+	for (int i = 0; i < 6; i++) {
+		d = _smin(d, rounded_box_sdf(p - hud_rects[i].xy, hud_rects[i].zw, hud_corner_px), hud_merge_k);
+	}
+	return d;
 }
 
 vec4 get_color(float type) {
@@ -389,15 +412,22 @@ void fragment() {
 	// ── Tint the glass (button-identical) ──
 	vec3 color = mix(bg, glass_tint.rgb, glass_tint.a);
 
+	// Where a HUD panel fuses onto the board, fade the board's own rim/border
+	// so the outline opens up into the panel (one connected silhouette).
+	float hud_open = 1.0;
+	if (hud_active > 0.5) {
+		hud_open = smoothstep(-2.0, hud_merge_k, hud_union_sdf(px));
+	}
+
 	// ── Edge rim light (outer boundary only — each glass tile draws its
 	// own rim, so tracing the walls here would double-outline every block) ──
 	float rim = (1.0 - smoothstep(0.0, border_width, -bsdf)) * step(bsdf, 0.0);
-	rim *= rim_intensity;
+	rim *= rim_intensity * hud_open;
 	color = mix(color, border_color.rgb, rim * border_color.a);
 
 	// ── Border stroke (outer boundary only) ──
 	float border = 1.0 - smoothstep(border_width - 1.5, border_width + 1.5, abs(bsdf));
-	color = mix(color, border_color.rgb, border * border_color.a);
+	color = mix(color, border_color.rgb, border * border_color.a * hud_open);
 
 	// ── Top specular sheen (button-identical) ──
 	float sheen = smoothstep(sheen_falloff, 0.0, UV.y) * sheen_intensity * (1.0 - w * 0.6);
