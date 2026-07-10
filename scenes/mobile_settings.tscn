@@ -153,6 +153,12 @@ custom_minimum_size = Vector2(130, 44)
 layout_mode = 2
 text = "Fused"
 
+[node name="HudResetBtn" type="Button" parent="Center/Panel/Margin/VBox"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 44)
+layout_mode = 2
+text = "Reset HUD Layout"
+
 [node name="CloseBtn" type="Button" parent="Center/Panel/Margin/VBox"]
 unique_name_in_owner = true
 custom_minimum_size = Vector2(0, 44)

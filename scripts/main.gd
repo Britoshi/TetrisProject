@@ -201,6 +201,8 @@ func _ready() -> void:
 	_sprint_menu.setup(SPRINT_TARGETS, sprint_records)
 	_sprint_menu.target_selected.connect(_start_sprint)
 	_mobile_controls = get_node_or_null("MobileControls/ButtonPanel")
+	if _mobile_controls and _mobile_controls.has_signal("hud_reset_requested"):
+		_mobile_controls.hud_reset_requested.connect(_on_hud_reset_requested)
 	_game_settings = get_node_or_null("/root/GameSettings")
 	if _game_settings:
 		_game_settings.changed.connect(_update_board_texture)
@@ -881,6 +883,16 @@ func _hud_apply_resize(pos: Vector2) -> void:
 	scale = clampf(scale, _HUD_MIN_SCALE, _HUD_MAX_SCALE)
 	var new_pos: Vector2 = anchor - _hud_corner_frac(anchor_i) * (base_size * scale)
 	_hud_set_override(_hud_edit_key, new_pos, scale)
+	_position_all_nodes()
+
+func _on_hud_reset_requested() -> void:
+	"""Settings → "Reset HUD Layout": clear all overrides, back to defaults."""
+	_hud_edit_key = ""
+	_hud_drag = ""
+	_hud_press_key = ""
+	_hud_over = {}
+	if _game_settings and _game_settings.has_method("reset_hud_layout"):
+		_game_settings.reset_hud_layout()
 	_position_all_nodes()
 
 func _hud_trigger_ripple(pos: Vector2) -> void:

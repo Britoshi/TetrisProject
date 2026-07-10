@@ -11,6 +11,7 @@ extends Control
 
 signal edit_layout_requested
 signal reset_requested
+signal hud_reset_requested
 signal size_stepped(direction: float)
 signal aspect_stepped(direction: float)
 signal buttons_visible_toggled(buttons_visible: bool)
@@ -48,6 +49,7 @@ func _ready() -> void:
 
 	_glassify(%EditBtn, TINT_NEUTRAL)
 	_glassify(%ResetBtn, TINT_RESET)
+	_glassify(%HudResetBtn, TINT_RESET)
 	_glassify(%SizeMinus, TINT_NEUTRAL)
 	_glassify(%SizePlus, TINT_NEUTRAL)
 	_glassify(%AspectMinus, TINT_NEUTRAL)
@@ -61,6 +63,7 @@ func _ready() -> void:
 
 	%EditBtn.pressed.connect(func(): edit_layout_requested.emit())
 	%ResetBtn.pressed.connect(func(): reset_requested.emit())
+	%HudResetBtn.pressed.connect(func(): hud_reset_requested.emit())
 	%SizeMinus.pressed.connect(func(): size_stepped.emit(-1.0))
 	%SizePlus.pressed.connect(func(): size_stepped.emit(1.0))
 	%AspectMinus.pressed.connect(func(): aspect_stepped.emit(-1.0))

@@ -10,6 +10,9 @@
 
 extends Control
 
+# Forwarded from the settings panel so main.gd can reset the HUD panel layout.
+signal hud_reset_requested
+
 
 # ── Layout constants ──
 const ROWS: int = 2
@@ -803,6 +806,7 @@ func _open_settings() -> void:
 		_settings_ui = packed.instantiate()
 		_settings_ui.edit_layout_requested.connect(_on_settings_edit_layout)
 		_settings_ui.reset_requested.connect(_on_settings_reset)
+		_settings_ui.hud_reset_requested.connect(_on_settings_hud_reset)
 		_settings_ui.size_stepped.connect(_on_settings_size_stepped)
 		_settings_ui.aspect_stepped.connect(_on_settings_aspect_stepped)
 		_settings_ui.buttons_visible_toggled.connect(_on_settings_buttons_toggled)
@@ -832,6 +836,11 @@ func _on_settings_reset() -> void:
 	_haptic_pulse()
 	_reset_to_defaults()
 	_settings_ui.setup(_btn_size_mult, _btn_aspect, not _buttons_hidden)
+
+
+func _on_settings_hud_reset() -> void:
+	_haptic_pulse()
+	hud_reset_requested.emit()
 
 
 func _on_settings_size_stepped(direction: float) -> void:
