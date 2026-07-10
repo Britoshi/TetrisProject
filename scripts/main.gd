@@ -103,6 +103,10 @@ var _stats_panel: ColorRect = null
 var _hold_panel: ColorRect = null
 var _next_panel: ColorRect = null
 var _hud_panel_shader: Shader = null
+# Preview geometry (set in _position_all_nodes, used to center pieces)
+var _hud_panel_w: float = 0.0
+var _hud_preview_cs: float = 0.0
+var _hud_row_h: float = 0.0
 
 # HUD Labels
 var _score_label: Label = null
@@ -852,23 +856,39 @@ func _update_hud() -> void:
 	else:
 		_time_label.visible = false
 
+func _preview_origin(offsets: Array, pcs: float) -> Vector2:
+	"""Top-left placement so a piece's bounding box is centered within the
+	panel width and one preview row height (offsets are cell coords)."""
+	var minx := 99; var maxx := -99; var miny := 99; var maxy := -99
+	for off in offsets:
+		minx = mini(minx, off.x); maxx = maxi(maxx, off.x)
+		miny = mini(miny, off.y); maxy = maxi(maxy, off.y)
+	var pw: float = (maxx - minx + 1) * pcs
+	var ph: float = (maxy - miny + 1) * pcs
+	var x0: float = (_hud_panel_w - pw) * 0.5 - minx * pcs
+	var y0: float = (_hud_row_h - ph) * 0.5 - miny * pcs
+	return Vector2(x0, y0)
+
 func _update_hold_preview() -> void:
 	"""Update hold piece display. Call when hold piece changes."""
+	if piece_data == null or _hold_cells.is_empty():
+		return
 	if _held_piece_type == Constants.PieceType.EMPTY:
 		for i in range(_hold_cells.size()):
 			_hold_cells[i].visible = false
 		return
 
-	var preview_cs: int = maxi(4, _cell_size / 2)
+	var pcs: float = _hud_preview_cs if _hud_preview_cs > 0.0 else maxf(4.0, _cell_size / 2.0)
 	var offsets: Array = piece_data.CELLS[_held_piece_type][0]
 	var color: Color = Constants.COLORS.get(_held_piece_type, Color.GRAY) as Color
+	var origin := _preview_origin(offsets, pcs)
 
 	for i in range(4):
 		if i >= _hold_cells.size():
 			break
 		var off: Vector2i = offsets[i]
-		_hold_cells[i].position = Vector2(off.x * preview_cs, off.y * preview_cs)
-		_hold_cells[i].size = Vector2(preview_cs, preview_cs)
+		_hold_cells[i].position = origin + Vector2(off.x * pcs, off.y * pcs)
+		_hold_cells[i].size = Vector2(pcs, pcs)
 		var alpha: float = 0.35 if _hold_locked else 1.0
 		_hold_materials[i].set_shader_parameter("fill_color", color)
 		_hold_materials[i].set_shader_parameter("alpha", alpha)
@@ -876,12 +896,14 @@ func _update_hold_preview() -> void:
 
 func _update_next_preview() -> void:
 	"""Update next-piece preview display. Call when bag advances or on reset."""
+	if bag == null or _next_sub_containers.size() < 3:
+		return
 	if state == State.GAME_OVER or state == State.SPRINT_COMPLETE:
 		for sub in _next_sub_containers:
 			sub.visible = false
 		return
 
-	var preview_cs: int = maxi(4, _cell_size / 2)
+	var pcs: float = _hud_preview_cs if _hud_preview_cs > 0.0 else maxf(4.0, _cell_size / 2.0)
 	var next_pieces: Array[int] = bag.peek_next(3)
 
 	for i in range(3):
@@ -889,12 +911,13 @@ func _update_next_preview() -> void:
 		var p_type: int = next_pieces[i]
 		var color: Color = Constants.COLORS.get(p_type, Color.GRAY) as Color
 		var offsets: Array = piece_data.CELLS[p_type][0]
+		var origin := _preview_origin(offsets, pcs)
 		for j in range(4):
 			if j >= _next_cells[i].size():
 				break
 			var off: Vector2i = offsets[j]
-			_next_cells[i][j].position = Vector2(off.x * preview_cs, off.y * preview_cs)
-			_next_cells[i][j].size = Vector2(preview_cs, preview_cs)
+			_next_cells[i][j].position = origin + Vector2(off.x * pcs, off.y * pcs)
+			_next_cells[i][j].size = Vector2(pcs, pcs)
 			_next_materials[i][j].set_shader_parameter("fill_color", color)
 			_next_materials[i][j].set_shader_parameter("alpha", 1.0)
 			_next_cells[i][j].visible = true
@@ -989,12 +1012,14 @@ func _position_all_nodes() -> void:
 	var preview_cs: float = maxf(4.0, cs / 2.0)
 	var preview_row: float = preview_cs * 2.6   # per next/hold preview block
 	var top_y: float = by + cs * 0.55
+	# Stashed so the preview updaters can center each piece in the panel
+	_hud_panel_w = panel_w
+	_hud_preview_cs = preview_cs
+	_hud_row_h = preview_row
 
 	# Right-side panels (stats + next), clamped to stay on screen
 	var right_px: float = minf(bx + board_w + margin, vw - panel_w - margin)
 	var content_x: float = right_px + pad
-	# center a ~3-wide preview block within the panel
-	var preview_x: float = right_px + panel_w * 0.5 - preview_cs * 1.5
 
 	# Stats panel
 	var stats_h: float = pad * 2.0 + line_h * 4.0
@@ -1024,14 +1049,16 @@ func _position_all_nodes() -> void:
 		_next_title_label.size = Vector2(panel_w, header_h)
 		_next_title_label.add_theme_font_size_override("font_size", font_s)
 	if _next_container:
-		_next_container.position = Vector2(preview_x, next_top + pad + header_h + preview_cs * 0.4)
+		# Container at the panel origin; each piece is centered in panel_w by
+		# _update_next_preview, each sub-container stacked one row apart.
+		_next_container.position = Vector2(right_px, next_top + pad + header_h)
 		for i in range(_next_sub_containers.size()):
 			_next_sub_containers[i].position = Vector2(0, i * preview_row)
+	_update_next_preview()
 
 	# Hold panel (left side)
 	var hold_px: float = maxf(margin, bx - panel_w - margin)
 	var hold_h: float = pad * 2.0 + header_h + preview_row
-	var hold_preview_x: float = hold_px + panel_w * 0.5 - preview_cs * 1.5
 	if _hold_panel:
 		_hold_panel.position = Vector2(hold_px, top_y)
 		_hold_panel.size = Vector2(panel_w, hold_h)
@@ -1041,7 +1068,8 @@ func _position_all_nodes() -> void:
 		_hold_title_label.size = Vector2(panel_w, header_h)
 		_hold_title_label.add_theme_font_size_override("font_size", font_s)
 	if _hold_container:
-		_hold_container.position = Vector2(hold_preview_x, top_y + pad + header_h + preview_cs * 0.4)
+		_hold_container.position = Vector2(hold_px, top_y + pad + header_h)
+	_update_hold_preview()
 
 	# Board shader geometry + re-bake blurred bg if the screen size changed
 	if _board_material:
