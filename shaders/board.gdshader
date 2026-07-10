@@ -95,6 +95,9 @@ uniform float block_emission : hint_range(0.0, 4.0) = 1.2;
 // Face = refracted bg + piece tint; rim = HDR piece color (bloom hugs edges)
 uniform float block_tint_alpha : hint_range(0.0, 1.0) = 0.65;
 uniform float block_warp_intensity : hint_range(0.0, 2.0) = 0.15;
+// Overlay pass: when 1, output ONLY the block tiles (see main.gd — a copy
+// drawn above the mobile buttons so blocks stay visible over them).
+uniform float overlay_mode : hint_range(0.0, 1.0) = 0.0;
 // 0 = each block keeps its flat color; 1 = colors melt into neighbors
 uniform float block_color_blend : hint_range(0.0, 1.0) = 0.4;
 // Width of the color-blend seam, in cells (0.5 = full bilinear smear)
@@ -404,6 +407,8 @@ void fragment() {
 	color += border_color.rgb * splash_glow * 0.2;
 
 	// ── Cells on top of the glass ──
+	vec3 overlay_col = vec3(0.0);
+	float overlay_a = 0.0;
 	vec2 local_uv = fract(grid_pos);
 	if (cell_coord.x >= 0.0 && cell_coord.x < cell_count.x &&
 	    cell_coord.y >= 0.0 && cell_coord.y < cell_count.y) {
@@ -479,6 +484,11 @@ void fragment() {
 				}
 			}
 			color = mix(color, tile_col, tile_alpha);
+			// Overlay carries only the OUTLINE (a thin HDR stroke on the
+			// merged silhouette) so it shows block positions over the mobile
+			// buttons without hiding them behind solid tiles.
+			overlay_col = piece_col * (1.0 + block_emission);
+			overlay_a = 1.0 - smoothstep(0.0, 2.5, abs(tile_sdf));
 		}
 	}
 
@@ -494,5 +504,17 @@ void fragment() {
 	color = mix(color, rim_hdr, ghost_rim);
 	alpha_out = max(alpha_out, ghost_rim);
 
-	COLOR = vec4(color, alpha_out);
+	// Overlay mode: emit ONLY the blocks + ghost preview (transparent
+	// elsewhere) so a copy drawn ABOVE the mobile buttons keeps them visible
+	// while showing the placement targets over the button UI.
+	if (overlay_mode > 0.5) {
+		// Outlines only: block silhouette stroke + ghost outline
+		vec3 oc = overlay_col;
+		float oa = overlay_a;
+		oc = mix(oc, rim_hdr, ghost_rim);
+		oa = max(oa, ghost_rim);
+		COLOR = vec4(oc, oa * shape_alpha);
+	} else {
+		COLOR = vec4(color, alpha_out);
+	}
 }

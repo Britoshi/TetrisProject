@@ -743,6 +743,12 @@ func set_menu_mode(on: bool) -> void:
 	_apply_mode()
 
 
+func buttons_visible() -> bool:
+	"""True when the game touch buttons are actually on screen (so main.gd
+	only pays for the over-the-buttons board overlay when it's needed)."""
+	return not _buttons_hidden and not _menu_mode
+
+
 # ── SETTINGS (separate scene: scenes/mobile_settings.tscn) ──
 
 # Public wrappers so main.gd can open/close settings (e.g. from Esc).

@@ -80,6 +80,11 @@ var _board_rect: ColorRect = null
 var _board_material: ShaderMaterial = null
 var _board_image: Image = null
 var _board_texture: ImageTexture = null
+# Blocks-only copy of the board on a layer ABOVE the mobile buttons, so
+# placed blocks stay visible over the buttons (see board.gdshader overlay_mode)
+var _board_overlay_rect: ColorRect = null
+var _board_overlay_material: ShaderMaterial = null
+var _board_overlay_layer: CanvasLayer = null
 const BOARD_TEX_W: int = 10
 const BOARD_TEX_H: int = 22
 
@@ -417,6 +422,8 @@ func _bake_board_bg() -> void:
 
 	var baked := ImageTexture.create_from_image(img)
 	_board_material.set_shader_parameter("bg_tex", baked)
+	if _board_overlay_material:
+		_board_overlay_material.set_shader_parameter("bg_tex", baked)
 	_bg_bake_size = vp_size
 	_bg_baked_tex = baked
 	_apply_glass_to_pieces(baked)
@@ -545,6 +552,27 @@ func _create_board_node() -> void:
 	_board_rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_board_rect.material = _board_material
 	_game_layer.add_child(_board_rect)
+
+	_create_board_overlay()
+
+func _create_board_overlay() -> void:
+	# Duplicate the board material (shares board_tex/bg_tex refs, so block and
+	# background updates propagate), switch it to blocks-only, and draw it on
+	# a CanvasLayer above the mobile buttons (layer 100).
+	_board_overlay_material = _board_material.duplicate()
+	_board_overlay_material.set_shader_parameter("overlay_mode", 1.0)
+	_board_overlay_material.set_shader_parameter("board_tex", _board_texture)
+
+	_board_overlay_layer = CanvasLayer.new()
+	_board_overlay_layer.name = "BoardOverlayLayer"
+	_board_overlay_layer.layer = 101
+	add_child(_board_overlay_layer)
+
+	_board_overlay_rect = ColorRect.new()
+	_board_overlay_rect.name = "BoardOverlayRect"
+	_board_overlay_rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_board_overlay_rect.material = _board_overlay_material
+	_board_overlay_layer.add_child(_board_overlay_rect)
 
 func _create_piece_cells() -> void:
 	_piece_container = Node2D.new()
@@ -717,6 +745,10 @@ func _set_game_nodes_visible(v: bool) -> void:
 	"""Show/hide all game rendering nodes (board, pieces, HUD, previews)."""
 	if _board_rect:
 		_board_rect.visible = v
+	if _board_overlay_rect:
+		# Only pay for the second board pass when buttons are actually shown
+		var btns: bool = _mobile_controls != null and _mobile_controls.buttons_visible()
+		_board_overlay_rect.visible = v and btns
 	if _piece_container:
 		_piece_container.visible = v
 	if _ghost_container:
@@ -770,6 +802,13 @@ func _update_piece_positions() -> void:
 			_piece_cells[idx].visible = false
 		idx += 1
 
+func _set_board_param(param: String, value) -> void:
+	"""Set a shader param on both the board and its over-the-buttons overlay."""
+	if _board_material:
+		_board_material.set_shader_parameter(param, value)
+	if _board_overlay_material:
+		_board_overlay_material.set_shader_parameter(param, value)
+
 func _update_ghost_positions() -> void:
 	"""Drive the glass hole cutout at the ghost (drop preview) position.
 	The old translucent cells are replaced by a piece-shaped hole in the
@@ -778,7 +817,7 @@ func _update_ghost_positions() -> void:
 	if _board_material == null:
 		return
 	if (state != State.PLAYING and state != State.REPLAY) or controller.is_locked:
-		_board_material.set_shader_parameter("ghost_active", 0.0)
+		_set_board_param("ghost_active", 0.0)
 		return
 
 	var cs: int = _cell_size
@@ -786,7 +825,7 @@ func _update_ghost_positions() -> void:
 	var ghost_pos := Vector2i(controller.position.x, ghost_y)
 	var cells: Array[Vector2i] = controller.get_cells_at(ghost_pos, controller.rotation)
 	if cells.size() < 4:
-		_board_material.set_shader_parameter("ghost_active", 0.0)
+		_set_board_param("ghost_active", 0.0)
 		return
 
 	var board_size := Vector2(Constants.COLS, Constants.VISIBLE_ROWS) * float(cs)
@@ -796,13 +835,17 @@ func _update_ghost_positions() -> void:
 		p.append(c - board_size * 0.5)
 	var rounding: float = cs * 0.12
 	var pcolor: Color = Constants.COLORS.get(controller.piece_type, Color.GRAY) as Color
-	_board_material.set_shader_parameter("ghost_color", Color(pcolor.r, pcolor.g, pcolor.b, 0.38))
-	_board_material.set_shader_parameter("ghost_rim_px", cs * 0.1)
-	_board_material.set_shader_parameter("ghost_active", 1.0)
-	_board_material.set_shader_parameter("ghost_half", cs * 0.5 - rounding)
-	_board_material.set_shader_parameter("ghost_round", rounding)
-	_board_material.set_shader_parameter("ghost_cells_a", Vector4(p[0].x, p[0].y, p[1].x, p[1].y))
-	_board_material.set_shader_parameter("ghost_cells_b", Vector4(p[2].x, p[2].y, p[3].x, p[3].y))
+	_set_board_param("ghost_color", Color(pcolor.r, pcolor.g, pcolor.b, 0.38))
+	_set_board_param("ghost_rim_px", cs * 0.1)
+	_set_board_param("ghost_active", 1.0)
+	_set_board_param("ghost_half", cs * 0.5 - rounding)
+	_set_board_param("ghost_round", rounding)
+	_set_board_param("ghost_cells_a", Vector4(p[0].x, p[0].y, p[1].x, p[1].y))
+	_set_board_param("ghost_cells_b", Vector4(p[2].x, p[2].y, p[3].x, p[3].y))
+	# When the overlay is drawing the ghost over the buttons, suppress it on
+	# the base board so the two layers don't composite into a doubled ghost.
+	if _board_material and _mobile_controls != null and _mobile_controls.buttons_visible():
+		_board_material.set_shader_parameter("ghost_active", 0.0)
 
 func _update_hud() -> void:
 	"""Update HUD label text. Called each frame during gameplay."""
@@ -939,10 +982,13 @@ func _position_all_nodes() -> void:
 	var font_s: int = int(14 * _font_scale)
 	var font_m: int = int(16 * _font_scale)
 
-	# Board
+	# Board (+ blocks-only overlay above the buttons, same geometry)
 	if _board_rect:
 		_board_rect.position = Vector2(bx, by)
 		_board_rect.size = Vector2(board_w, board_h)
+	if _board_overlay_rect:
+		_board_overlay_rect.position = Vector2(bx, by)
+		_board_overlay_rect.size = Vector2(board_w, board_h)
 
 	# ── HUD: glass panels with content inside ──
 	var vw: float = get_viewport_rect().size.x
@@ -1010,6 +1056,9 @@ func _position_all_nodes() -> void:
 		_board_material.set_shader_parameter("rect_size", Vector2(board_w, board_h))
 		_board_material.set_shader_parameter("corner_radius_px", cs * 0.8)
 		_board_material.set_shader_parameter("hole_bevel_px", cs * 0.9)
+		if _board_overlay_material:
+			_board_overlay_material.set_shader_parameter("rect_size", Vector2(board_w, board_h))
+			_board_overlay_material.set_shader_parameter("corner_radius_px", cs * 0.8)
 		if _bg_bake_size != get_viewport_rect().size:
 			_bake_board_bg()
 
