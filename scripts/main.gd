@@ -98,10 +98,11 @@ var _ghost_container: Node2D = null
 var _ghost_cells: Array[ColorRect] = []
 var _ghost_materials: Array[ShaderMaterial] = []
 
-# HUD panels (glass frames behind the stat/Hold/Next groups)
-var _stats_panel: Panel = null
-var _hold_panel: Panel = null
-var _next_panel: Panel = null
+# HUD panels (liquid-glass frames behind the stat/Hold/Next groups)
+var _stats_panel: ColorRect = null
+var _hold_panel: ColorRect = null
+var _next_panel: ColorRect = null
+var _hud_panel_shader: Shader = null
 
 # HUD Labels
 var _score_label: Label = null
@@ -445,6 +446,10 @@ func _apply_glass_to_pieces(baked: Texture2D) -> void:
 		m.set_shader_parameter("bg_dim", 0.35)
 		m.set_shader_parameter("tint_alpha", 0.7)
 		m.set_shader_parameter("block_emission", 1.2)
+	# HUD glass panels share the same frosted background
+	for panel in [_stats_panel, _hold_panel, _next_panel]:
+		if panel and panel.material:
+			panel.material.set_shader_parameter("bg_tex", baked)
 
 # ═══════════════════════════════════════════════════════════
 # ── Shader rendering node creation ──
@@ -596,42 +601,26 @@ func _create_ghost_cells() -> void:
 		_ghost_cells.append(cr)
 		_ghost_materials.append(cr.material as ShaderMaterial)
 
-func _hud_panel_style() -> StyleBoxFlat:
-	var s := StyleBoxFlat.new()
-	s.bg_color = Color(0.07, 0.09, 0.15, 0.74)
-	s.corner_radius_top_left = 12
-	s.corner_radius_top_right = 12
-	s.corner_radius_bottom_left = 12
-	s.corner_radius_bottom_right = 12
-	s.border_width_left = 1
-	s.border_width_right = 1
-	s.border_width_top = 1
-	s.border_width_bottom = 1
-	s.border_color = Color(1, 1, 1, 0.13)
-	s.shadow_size = 8
-	s.shadow_offset = Vector2(0, 3)
-	s.shadow_color = Color(0, 0, 0, 0.4)
-	s.anti_aliasing = true
-	return s
+func _size_glass_panel(panel: ColorRect) -> void:
+	if panel.material:
+		panel.material.set_shader_parameter("rect_px", panel.size)
+		panel.material.set_shader_parameter("corner_px", 12.0)
+
+func _make_glass_panel(pname: String) -> ColorRect:
+	var cr := ColorRect.new()
+	cr.name = pname
+	cr.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var mat := ShaderMaterial.new()
+	mat.shader = _hud_panel_shader
+	cr.material = mat
+	_game_layer.add_child(cr)
+	return cr
 
 func _create_hud_panels() -> void:
-	_stats_panel = Panel.new()
-	_stats_panel.name = "StatsPanel"
-	_stats_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_stats_panel.add_theme_stylebox_override("panel", _hud_panel_style())
-	_game_layer.add_child(_stats_panel)
-
-	_hold_panel = Panel.new()
-	_hold_panel.name = "HoldPanel"
-	_hold_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_hold_panel.add_theme_stylebox_override("panel", _hud_panel_style())
-	_game_layer.add_child(_hold_panel)
-
-	_next_panel = Panel.new()
-	_next_panel.name = "NextPanel"
-	_next_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_next_panel.add_theme_stylebox_override("panel", _hud_panel_style())
-	_game_layer.add_child(_next_panel)
+	_hud_panel_shader = load("res://shaders/glass_panel.gdshader") as Shader
+	_stats_panel = _make_glass_panel("StatsPanel")
+	_hold_panel = _make_glass_panel("HoldPanel")
+	_next_panel = _make_glass_panel("NextPanel")
 
 func _create_hud_labels() -> void:
 	var font := ThemeDB.fallback_font
@@ -1012,6 +1001,7 @@ func _position_all_nodes() -> void:
 	if _stats_panel:
 		_stats_panel.position = Vector2(right_px, top_y)
 		_stats_panel.size = Vector2(panel_w, stats_h)
+		_size_glass_panel(_stats_panel)
 	var sy: float = top_y + pad
 	for i in [_score_label, _lines_label, _level_label, _time_label]:
 		if i == null:
@@ -1028,6 +1018,7 @@ func _position_all_nodes() -> void:
 	if _next_panel:
 		_next_panel.position = Vector2(right_px, next_top)
 		_next_panel.size = Vector2(panel_w, next_h)
+		_size_glass_panel(_next_panel)
 	if _next_title_label:
 		_next_title_label.position = Vector2(right_px, next_top + pad)
 		_next_title_label.size = Vector2(panel_w, header_h)
@@ -1044,6 +1035,7 @@ func _position_all_nodes() -> void:
 	if _hold_panel:
 		_hold_panel.position = Vector2(hold_px, top_y)
 		_hold_panel.size = Vector2(panel_w, hold_h)
+		_size_glass_panel(_hold_panel)
 	if _hold_title_label:
 		_hold_title_label.position = Vector2(hold_px, top_y + pad)
 		_hold_title_label.size = Vector2(panel_w, header_h)
