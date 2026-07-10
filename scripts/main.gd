@@ -111,6 +111,33 @@ var _hud_panel_w: float = 0.0
 var _hud_preview_cs: float = 0.0
 var _hud_row_h: float = 0.0
 
+# ── HUD drag-to-rearrange (long-press edit mode) ──
+# _hud_over[key] = {"x", "y" (top-left as viewport fraction), "s" (scale)}.
+var _hud_over: Dictionary = {}
+# Default (computed) pos+size per panel, refreshed each layout — the drag math
+# and content layout share this as their source of truth.
+var _hud_default: Dictionary = {}
+const _HUD_KEYS: Array[String] = ["stats", "next", "hold"]
+const _HUD_LONG_PRESS := 0.4      # seconds held to enter edit mode
+const _HUD_MOVE_SLOP := 12.0      # px of motion that cancels the long-press
+const _HUD_CORNER_GRAB := 30.0    # px hit radius around a corner handle
+const _HUD_MIN_SCALE := 0.55
+const _HUD_MAX_SCALE := 2.4
+var _hud_edit_key: String = ""    # panel currently in edit mode ("" = none)
+var _hud_press_key: String = ""   # panel a long-press is arming on
+var _hud_press_pos := Vector2.ZERO
+var _hud_press_time: float = 0.0
+var _hud_press_moved: bool = false
+var _hud_drag: String = ""        # "move" | "resize" | "" while a pointer drags
+var _hud_drag_corner: int = -1    # 0=TL 1=TR 2=BL 3=BR (resize anchor is opposite)
+var _hud_drag_from := Vector2.ZERO # pointer pos at drag start
+var _hud_drag_pos0 := Vector2.ZERO # panel top-left at drag start (px)
+var _hud_drag_scale0: float = 1.0
+var _hud_ripple_pos := Vector2.ZERO
+var _hud_ripple_age: float = -1.0 # <0 = inactive
+var _hud_sel_glow: float = 0.0    # eased highlight intensity 0..1
+var _hud_sel_rect := Vector4(0.0, 0.0, -1.0, -1.0)  # selected panel (cx,cy,hw,hh)
+
 # HUD Labels
 var _score_label: Label = null
 var _lines_label: Label = null
@@ -177,6 +204,8 @@ func _ready() -> void:
 	_game_settings = get_node_or_null("/root/GameSettings")
 	if _game_settings:
 		_game_settings.changed.connect(_update_board_texture)
+		# Live copy of the player's dragged HUD layout (persisted on save)
+		_hud_over = _game_settings.hud_layout.duplicate(true)
 	_game_history = get_node_or_null("/root/GameHistory")
 
 	# History screen + replay HUD (start hidden)
@@ -287,7 +316,15 @@ func _input(event: InputEvent) -> void:
 	# out of a replay, else open the settings panel.
 	if event is InputEventKey and event.pressed and not event.echo \
 			and event.keycode == KEY_ESCAPE:
+		if _hud_edit_key != "":
+			_hud_finish_edit()   # Esc saves & leaves HUD edit mode
+			return
 		_handle_escape()
+		return
+
+	# HUD drag-to-rearrange (long-press edit mode) intercepts pointer input.
+	if _hud_handle_input(event):
+		get_viewport().set_input_as_handled()
 		return
 
 	match state:
@@ -608,10 +645,297 @@ func _create_ghost_cells() -> void:
 		_ghost_cells.append(cr)
 		_ghost_materials.append(cr.material as ShaderMaterial)
 
-func _size_glass_panel(panel: ColorRect) -> void:
-	if panel.material:
-		panel.material.set_shader_parameter("rect_px", panel.size)
-		panel.material.set_shader_parameter("corner_px", 18.0)
+func _resolve_hud_panel(key: String, vw: float, vh: float) -> Array:
+	"""Return [top_left_px, scale] for a panel — the player's dragged override
+	(clamped so it can't be lost off-screen) or the default computed spot."""
+	var d: Dictionary = _hud_default.get(key, {})
+	var o = _hud_over.get(key, null)
+	if o is Dictionary:
+		var sc: float = clampf(float(o.get("s", 1.0)), _HUD_MIN_SCALE, _HUD_MAX_SCALE)
+		var sz: Vector2 = (d.get("size", Vector2(80.0, 40.0)) as Vector2) * sc
+		var p := Vector2(float(o.get("x", 0.0)) * vw, float(o.get("y", 0.0)) * vh)
+		p.x = clampf(p.x, -sz.x * 0.5, vw - sz.x * 0.5)
+		p.y = clampf(p.y, 0.0, vh - sz.y * 0.5)
+		return [p, sc]
+	return [d.get("pos", Vector2.ZERO), 1.0]
+
+func _layout_stats(pos: Vector2, sc: float, m: Dictionary) -> void:
+	var pad: float = float(m.pad) * sc
+	var line_h: float = float(m.line_h) * sc
+	var fm: int = int(round(float(m.font_m) * sc))
+	var size: Vector2 = (_hud_default["stats"]["size"] as Vector2) * sc
+	if _stats_panel:
+		_stats_panel.position = pos
+		_stats_panel.size = size
+	var cx: float = pos.x + pad
+	var sy: float = pos.y + pad
+	for lbl in [_score_label, _lines_label, _level_label, _time_label]:
+		if lbl:
+			lbl.add_theme_font_size_override("font_size", fm)
+	if _score_label: _score_label.position = Vector2(cx, sy)
+	if _lines_label: _lines_label.position = Vector2(cx, sy + line_h)
+	if _level_label: _level_label.position = Vector2(cx, sy + line_h * 2.0)
+	if _time_label: _time_label.position = Vector2(cx, sy + line_h * 3.0)
+
+func _layout_next(pos: Vector2, sc: float, m: Dictionary) -> void:
+	var pad: float = float(m.pad) * sc
+	var header_h: float = float(m.header_h) * sc
+	var fs: int = int(round(float(m.font_s) * sc))
+	var prow: float = float(m.preview_row) * sc
+	var size: Vector2 = (_hud_default["next"]["size"] as Vector2) * sc
+	if _next_panel:
+		_next_panel.position = pos
+		_next_panel.size = size
+	if _next_title_label:
+		_next_title_label.position = Vector2(pos.x, pos.y + pad)
+		_next_title_label.size = Vector2(size.x, header_h)
+		_next_title_label.add_theme_font_size_override("font_size", fs)
+	if _next_container:
+		# Pieces are centered in _hud_panel_w by _update_next_preview.
+		_next_container.position = Vector2(pos.x, pos.y + pad + header_h)
+		for i in range(_next_sub_containers.size()):
+			_next_sub_containers[i].position = Vector2(0, i * prow)
+	_hud_panel_w = size.x
+	_hud_preview_cs = float(m.preview_cs) * sc
+	_hud_row_h = prow
+	_update_next_preview()
+
+func _layout_hold(pos: Vector2, sc: float, m: Dictionary) -> void:
+	var pad: float = float(m.pad) * sc
+	var header_h: float = float(m.header_h) * sc
+	var fs: int = int(round(float(m.font_s) * sc))
+	var size: Vector2 = (_hud_default["hold"]["size"] as Vector2) * sc
+	if _hold_panel:
+		_hold_panel.position = pos
+		_hold_panel.size = size
+	if _hold_title_label:
+		_hold_title_label.position = Vector2(pos.x, pos.y + pad)
+		_hold_title_label.size = Vector2(size.x, header_h)
+		_hold_title_label.add_theme_font_size_override("font_size", fs)
+	if _hold_container:
+		_hold_container.position = Vector2(pos.x, pos.y + pad + header_h)
+	_hud_panel_w = size.x
+	_hud_preview_cs = float(m.preview_cs) * sc
+	_hud_row_h = float(m.preview_row) * sc
+	_update_hold_preview()
+
+# ═══════════════════════════════════════════════════════════
+# ── HUD drag-to-rearrange (long-press edit mode) ──
+# ═══════════════════════════════════════════════════════════
+
+func _hud_panel_node(key: String) -> ColorRect:
+	match key:
+		"stats": return _stats_panel
+		"next": return _next_panel
+		"hold": return _hold_panel
+	return null
+
+func _hud_edit_allowed() -> bool:
+	if state != State.PLAYING and state != State.LINE_CLEAR:
+		return false
+	if _hud_glass == null or not _hud_glass.visible:
+		return false
+	if _mobile_controls and _mobile_controls.is_settings_open():
+		return false
+	return true
+
+func _hud_panel_at(pos: Vector2) -> String:
+	"""Topmost visible panel whose rect contains pos ("" if none)."""
+	for key in _HUD_KEYS:
+		var p := _hud_panel_node(key)
+		if p and p.visible and Rect2(p.position, p.size).has_point(pos):
+			return key
+	return ""
+
+func _hud_corner_frac(i: int) -> Vector2:
+	# 0=top-left 1=top-right 2=bottom-left 3=bottom-right
+	match i:
+		1: return Vector2(1.0, 0.0)
+		2: return Vector2(0.0, 1.0)
+		3: return Vector2(1.0, 1.0)
+	return Vector2(0.0, 0.0)
+
+func _hud_corner_point(topleft: Vector2, size: Vector2, i: int) -> Vector2:
+	return topleft + _hud_corner_frac(i) * size
+
+func _hud_corner_at(key: String, pos: Vector2) -> int:
+	"""Which corner handle (0..3) of `key`'s panel pos is grabbing, else -1."""
+	var p := _hud_panel_node(key)
+	if p == null:
+		return -1
+	for i in range(4):
+		if pos.distance_to(_hud_corner_point(p.position, p.size, i)) <= _HUD_CORNER_GRAB:
+			return i
+	return -1
+
+func _hud_current_scale(key: String) -> float:
+	var o = _hud_over.get(key, null)
+	if o is Dictionary:
+		return clampf(float(o.get("s", 1.0)), _HUD_MIN_SCALE, _HUD_MAX_SCALE)
+	return 1.0
+
+func _hud_set_override(key: String, pos_px: Vector2, scale: float) -> void:
+	var vw: float = get_viewport_rect().size.x
+	var vh: float = get_viewport_rect().size.y
+	var d: Dictionary = _hud_default.get(key, {})
+	var sz: Vector2 = (d.get("size", Vector2(80.0, 40.0)) as Vector2) * scale
+	var px: float = clampf(pos_px.x, -sz.x * 0.5, vw - sz.x * 0.5)
+	var py: float = clampf(pos_px.y, 0.0, vh - sz.y * 0.5)
+	_hud_over[key] = {"x": px / vw, "y": py / vh, "s": scale}
+
+func _hud_handle_input(event: InputEvent) -> bool:
+	var editing: bool = _hud_edit_key != ""
+	if not editing and not _hud_edit_allowed():
+		return false
+	if event is InputEventScreenTouch:
+		return _hud_pointer_down(event.position) if event.pressed else _hud_pointer_up()
+	if event is InputEventScreenDrag:
+		return _hud_pointer_move(event.position)
+	return false
+
+func _hud_pointer_down(pos: Vector2) -> bool:
+	if _hud_edit_key != "":
+		# In edit mode: grab a corner (resize), the body (move), switch panels,
+		# or tap outside everything to save & exit.
+		var c := _hud_corner_at(_hud_edit_key, pos)
+		if c >= 0:
+			_hud_start_resize(c, pos)
+			return true
+		var p := _hud_panel_node(_hud_edit_key)
+		if p and Rect2(p.position, p.size).has_point(pos):
+			_hud_start_move(pos)
+			return true
+		var other := _hud_panel_at(pos)
+		if other != "" and other != _hud_edit_key:
+			_hud_edit_key = other
+			_hud_trigger_ripple(pos)
+			_hud_start_move(pos)
+			return true
+		_hud_finish_edit()
+		return true
+	# Not editing: arm a long-press over a panel (don't consume — a quick tap
+	# should still behave normally).
+	var k := _hud_panel_at(pos)
+	if k == "":
+		return false
+	_hud_press_key = k
+	_hud_press_pos = pos
+	_hud_press_time = 0.0
+	return false
+
+func _hud_pointer_move(pos: Vector2) -> bool:
+	if _hud_drag == "move":
+		_hud_apply_move(pos)
+		return true
+	if _hud_drag == "resize":
+		_hud_apply_resize(pos)
+		return true
+	# Moving too far before the hold fires means it's a swipe, not a long-press.
+	if _hud_press_key != "" and pos.distance_to(_hud_press_pos) > _HUD_MOVE_SLOP:
+		_hud_press_key = ""
+	return false
+
+func _hud_pointer_up() -> bool:
+	if _hud_drag != "":
+		_hud_drag = ""
+		_hud_drag_corner = -1
+		return true          # stay in edit mode; tap elsewhere to save
+	if _hud_press_key != "":
+		_hud_press_key = ""  # released before the hold → normal tap
+	return _hud_edit_key != ""
+
+func _hud_start_move(pos: Vector2) -> void:
+	_hud_drag = "move"
+	_hud_drag_corner = -1
+	_hud_drag_from = pos
+	var p := _hud_panel_node(_hud_edit_key)
+	_hud_drag_pos0 = p.position if p else Vector2.ZERO
+
+func _hud_apply_move(pos: Vector2) -> void:
+	_hud_set_override(_hud_edit_key, _hud_drag_pos0 + (pos - _hud_drag_from),
+		_hud_current_scale(_hud_edit_key))
+	_position_all_nodes()
+
+func _hud_start_resize(corner: int, pos: Vector2) -> void:
+	_hud_drag = "resize"
+	_hud_drag_corner = corner
+	_hud_drag_from = pos
+	var p := _hud_panel_node(_hud_edit_key)
+	_hud_drag_pos0 = p.position if p else Vector2.ZERO
+	_hud_drag_scale0 = _hud_current_scale(_hud_edit_key)
+
+func _hud_apply_resize(pos: Vector2) -> void:
+	# Aspect-locked (uniform) scale so squares/text never distort. The corner
+	# opposite the grabbed one stays pinned; scale = pointer projected onto the
+	# panel's diagonal.
+	var d: Dictionary = _hud_default.get(_hud_edit_key, {})
+	var base_size: Vector2 = d.get("size", Vector2(80.0, 40.0)) as Vector2
+	var start_size: Vector2 = base_size * _hud_drag_scale0
+	var anchor_i: int = 3 - _hud_drag_corner
+	var anchor: Vector2 = _hud_corner_point(_hud_drag_pos0, start_size, anchor_i)
+	var diag: Vector2 = (_hud_corner_frac(_hud_drag_corner) - _hud_corner_frac(anchor_i)) * base_size
+	var denom: float = diag.length_squared()
+	var scale: float = _hud_drag_scale0
+	if denom > 0.001:
+		scale = (pos - anchor).dot(diag) / denom
+	scale = clampf(scale, _HUD_MIN_SCALE, _HUD_MAX_SCALE)
+	var new_pos: Vector2 = anchor - _hud_corner_frac(anchor_i) * (base_size * scale)
+	_hud_set_override(_hud_edit_key, new_pos, scale)
+	_position_all_nodes()
+
+func _hud_trigger_ripple(pos: Vector2) -> void:
+	_hud_ripple_pos = pos
+	_hud_ripple_age = 0.0
+
+func _hud_enter_edit(key: String, pos: Vector2) -> void:
+	_hud_edit_key = key
+	_hud_press_key = ""
+	_hud_trigger_ripple(pos)
+	_hud_start_move(pos)   # long-press flows straight into a move
+
+func _hud_finish_edit() -> void:
+	_hud_edit_key = ""
+	_hud_drag = ""
+	_hud_drag_corner = -1
+	_hud_press_key = ""
+	_hud_ripple_age = -1.0
+	if _game_settings and _game_settings.has_method("save_hud_layout"):
+		_game_settings.save_hud_layout(_hud_over)
+	_position_all_nodes()
+
+func _hud_edit_tick(delta: float) -> void:
+	# Arm the long-press → enter edit mode once held long enough & still.
+	if _hud_press_key != "" and _hud_edit_key == "":
+		if not _hud_edit_allowed():
+			_hud_press_key = ""
+		else:
+			_hud_press_time += delta
+			if _hud_press_time >= _HUD_LONG_PRESS:
+				_hud_enter_edit(_hud_press_key, _hud_press_pos)
+	# Ease the selection glow in/out and age the ripple.
+	if _hud_edit_key != "":
+		_hud_sel_glow = minf(1.0, _hud_sel_glow + delta * 5.0)
+	else:
+		_hud_sel_glow = maxf(0.0, _hud_sel_glow - delta * 6.0)
+	if _hud_ripple_age >= 0.0:
+		_hud_ripple_age += delta
+		if _hud_ripple_age > 1.15:
+			_hud_ripple_age = -1.0
+	_push_hud_edit_uniforms()
+
+func _push_hud_edit_uniforms() -> void:
+	if _hud_glass == null or _hud_glass.material == null:
+		return
+	var m: ShaderMaterial = _hud_glass.material
+	if _hud_edit_key != "":
+		var p := _hud_panel_node(_hud_edit_key)
+		if p:
+			var c: Vector2 = p.position + p.size * 0.5
+			_hud_sel_rect = Vector4(c.x, c.y, p.size.x * 0.5, p.size.y * 0.5)
+	m.set_shader_parameter("sel_rect", _hud_sel_rect)
+	m.set_shader_parameter("sel_glow", _hud_sel_glow)
+	m.set_shader_parameter("ripple_center", _hud_ripple_pos)
+	m.set_shader_parameter("ripple_age", _hud_ripple_age)
 
 func _update_hud_glass() -> void:
 	"""Feed the visible panel rects into the single merged-glass surface. The
@@ -1063,7 +1387,11 @@ func _position_all_nodes() -> void:
 		_board_overlay_rect.size = Vector2(board_w, board_h)
 
 	# ── HUD: glass panels with content inside ──
+	# Default metrics at scale 1. Each panel resolves to a custom-or-default
+	# (pos, scale); its content is laid out scaled to match (see the layout
+	# helpers). With no overrides this reproduces the original layout exactly.
 	var vw: float = get_viewport_rect().size.x
+	var vh: float = get_viewport_rect().size.y
 	var pad: float = maxf(8.0, cs * 0.3)
 	# Stats panel width is driven by its text; Hold/Next are narrower, sized
 	# to the (bigger) preview pieces so they read clearly and don't look empty.
@@ -1074,65 +1402,34 @@ func _position_all_nodes() -> void:
 	var preview_row: float = preview_cs * 2.35            # per next/hold block
 	var preview_w: float = preview_cs * 4.0 + pad * 2.0   # fits the I-piece + margin
 	var top_y: float = by + cs * 0.55
-	# Stashed so the preview updaters can center each piece in the panel
-	_hud_panel_w = preview_w
-	_hud_preview_cs = preview_cs
-	_hud_row_h = preview_row
-
-	# Right side: stats panel (wide) with the Next panel right-aligned under it
-	var right_px: float = minf(bx + board_w + margin, vw - stats_w - margin)
-	var content_x: float = right_px + pad
-	var right_edge: float = right_px + stats_w
-	var next_px: float = right_edge - preview_w
-
-	# Stats panel
 	var stats_h: float = pad * 2.0 + line_h * 4.0
-	if _stats_panel:
-		_stats_panel.position = Vector2(right_px, top_y)
-		_stats_panel.size = Vector2(stats_w, stats_h)
-		_size_glass_panel(_stats_panel)
-	var sy: float = top_y + pad
-	for i in [_score_label, _lines_label, _level_label, _time_label]:
-		if i == null:
-			continue
-		i.add_theme_font_size_override("font_size", font_m)
-	if _score_label: _score_label.position = Vector2(content_x, sy)
-	if _lines_label: _lines_label.position = Vector2(content_x, sy + line_h)
-	if _level_label: _level_label.position = Vector2(content_x, sy + line_h * 2.0)
-	if _time_label: _time_label.position = Vector2(content_x, sy + line_h * 3.0)
-
-	# Next panel (below stats, narrower, right-aligned)
-	var next_top: float = top_y + stats_h + margin
 	var next_h: float = pad * 2.0 + header_h + preview_row * 3.0
-	if _next_panel:
-		_next_panel.position = Vector2(next_px, next_top)
-		_next_panel.size = Vector2(preview_w, next_h)
-		_size_glass_panel(_next_panel)
-	if _next_title_label:
-		_next_title_label.position = Vector2(next_px, next_top + pad)
-		_next_title_label.size = Vector2(preview_w, header_h)
-		_next_title_label.add_theme_font_size_override("font_size", font_s)
-	if _next_container:
-		# Pieces are centered in preview_w by _update_next_preview.
-		_next_container.position = Vector2(next_px, next_top + pad + header_h)
-		for i in range(_next_sub_containers.size()):
-			_next_sub_containers[i].position = Vector2(0, i * preview_row)
-	_update_next_preview()
-
-	# Hold panel (left side, narrow)
-	var hold_px: float = maxf(margin, bx - preview_w - margin)
 	var hold_h: float = pad * 2.0 + header_h + preview_row
-	if _hold_panel:
-		_hold_panel.position = Vector2(hold_px, top_y)
-		_hold_panel.size = Vector2(preview_w, hold_h)
-		_size_glass_panel(_hold_panel)
-	if _hold_title_label:
-		_hold_title_label.position = Vector2(hold_px, top_y + pad)
-		_hold_title_label.size = Vector2(preview_w, header_h)
-		_hold_title_label.add_theme_font_size_override("font_size", font_s)
-	if _hold_container:
-		_hold_container.position = Vector2(hold_px, top_y + pad + header_h)
-	_update_hold_preview()
+
+	# Default origins: stats top-right of the board, Next right-aligned below it,
+	# Hold to the left of the board.
+	var right_px: float = minf(bx + board_w + margin, vw - stats_w - margin)
+	var next_px: float = right_px + stats_w - preview_w
+	var next_top: float = top_y + stats_h + margin
+	var hold_px: float = maxf(margin, bx - preview_w - margin)
+
+	_hud_default = {
+		"stats": {"pos": Vector2(right_px, top_y), "size": Vector2(stats_w, stats_h)},
+		"next": {"pos": Vector2(next_px, next_top), "size": Vector2(preview_w, next_h)},
+		"hold": {"pos": Vector2(hold_px, top_y), "size": Vector2(preview_w, hold_h)},
+	}
+	var base := {
+		"pad": pad, "font_s": font_s, "font_m": font_m,
+		"line_h": line_h, "header_h": header_h,
+		"preview_cs": preview_cs, "preview_row": preview_row,
+	}
+
+	var stats_r: Array = _resolve_hud_panel("stats", vw, vh)
+	var next_r: Array = _resolve_hud_panel("next", vw, vh)
+	var hold_r: Array = _resolve_hud_panel("hold", vw, vh)
+	_layout_stats(stats_r[0], stats_r[1], base)
+	_layout_next(next_r[0], next_r[1], base)
+	_layout_hold(hold_r[0], hold_r[1], base)
 	_update_hud_glass()
 
 	# Board shader geometry + re-bake blurred bg if the screen size changed
@@ -1195,7 +1492,9 @@ func _process(delta: float) -> void:
 			_set_game_nodes_visible(false)
 		State.PLAYING:
 			_set_game_nodes_visible(true)
-			_process_playing(delta)
+			# Freeze gravity/timer while the player rearranges the HUD.
+			if _hud_edit_key == "":
+				_process_playing(delta)
 		State.LINE_CLEAR:
 			_set_game_nodes_visible(true)
 			_process_line_clear(delta)
@@ -1220,6 +1519,9 @@ func _process(delta: float) -> void:
 		_update_piece_positions()
 		_update_ghost_positions()
 		_update_hud()
+
+	# HUD drag-to-rearrange: long-press arming, ripple/highlight animation.
+	_hud_edit_tick(delta)
 
 	# Overlays (game over, sprint complete) still use _draw()
 	if state == State.GAME_OVER or state == State.SPRINT_COMPLETE:
