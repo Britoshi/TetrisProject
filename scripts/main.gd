@@ -1005,27 +1005,31 @@ func _position_all_nodes() -> void:
 	# ── HUD: glass panels with content inside ──
 	var vw: float = get_viewport_rect().size.x
 	var pad: float = maxf(8.0, cs * 0.3)
-	var hud_w: float = maxf(cs * 2.9, 132.0 * _font_scale)
-	var panel_w: float = hud_w + pad * 2.0
+	# Stats panel width is driven by its text; Hold/Next are narrower, sized
+	# to the (bigger) preview pieces so they read clearly and don't look empty.
+	var stats_w: float = maxf(cs * 2.9, 132.0 * _font_scale) + pad * 2.0
 	var line_h: float = font_m + 8
 	var header_h: float = font_s + 8.0
-	var preview_cs: float = maxf(4.0, cs / 2.0)
-	var preview_row: float = preview_cs * 2.6   # per next/hold preview block
+	var preview_cs: float = maxf(6.0, cs * 0.62)          # bigger, more visible
+	var preview_row: float = preview_cs * 2.35            # per next/hold block
+	var preview_w: float = preview_cs * 4.0 + pad * 2.0   # fits the I-piece + margin
 	var top_y: float = by + cs * 0.55
 	# Stashed so the preview updaters can center each piece in the panel
-	_hud_panel_w = panel_w
+	_hud_panel_w = preview_w
 	_hud_preview_cs = preview_cs
 	_hud_row_h = preview_row
 
-	# Right-side panels (stats + next), clamped to stay on screen
-	var right_px: float = minf(bx + board_w + margin, vw - panel_w - margin)
+	# Right side: stats panel (wide) with the Next panel right-aligned under it
+	var right_px: float = minf(bx + board_w + margin, vw - stats_w - margin)
 	var content_x: float = right_px + pad
+	var right_edge: float = right_px + stats_w
+	var next_px: float = right_edge - preview_w
 
 	# Stats panel
 	var stats_h: float = pad * 2.0 + line_h * 4.0
 	if _stats_panel:
 		_stats_panel.position = Vector2(right_px, top_y)
-		_stats_panel.size = Vector2(panel_w, stats_h)
+		_stats_panel.size = Vector2(stats_w, stats_h)
 		_size_glass_panel(_stats_panel)
 	var sy: float = top_y + pad
 	for i in [_score_label, _lines_label, _level_label, _time_label]:
@@ -1037,35 +1041,34 @@ func _position_all_nodes() -> void:
 	if _level_label: _level_label.position = Vector2(content_x, sy + line_h * 2.0)
 	if _time_label: _time_label.position = Vector2(content_x, sy + line_h * 3.0)
 
-	# Next panel (below stats)
+	# Next panel (below stats, narrower, right-aligned)
 	var next_top: float = top_y + stats_h + margin
 	var next_h: float = pad * 2.0 + header_h + preview_row * 3.0
 	if _next_panel:
-		_next_panel.position = Vector2(right_px, next_top)
-		_next_panel.size = Vector2(panel_w, next_h)
+		_next_panel.position = Vector2(next_px, next_top)
+		_next_panel.size = Vector2(preview_w, next_h)
 		_size_glass_panel(_next_panel)
 	if _next_title_label:
-		_next_title_label.position = Vector2(right_px, next_top + pad)
-		_next_title_label.size = Vector2(panel_w, header_h)
+		_next_title_label.position = Vector2(next_px, next_top + pad)
+		_next_title_label.size = Vector2(preview_w, header_h)
 		_next_title_label.add_theme_font_size_override("font_size", font_s)
 	if _next_container:
-		# Container at the panel origin; each piece is centered in panel_w by
-		# _update_next_preview, each sub-container stacked one row apart.
-		_next_container.position = Vector2(right_px, next_top + pad + header_h)
+		# Pieces are centered in preview_w by _update_next_preview.
+		_next_container.position = Vector2(next_px, next_top + pad + header_h)
 		for i in range(_next_sub_containers.size()):
 			_next_sub_containers[i].position = Vector2(0, i * preview_row)
 	_update_next_preview()
 
-	# Hold panel (left side)
-	var hold_px: float = maxf(margin, bx - panel_w - margin)
+	# Hold panel (left side, narrow)
+	var hold_px: float = maxf(margin, bx - preview_w - margin)
 	var hold_h: float = pad * 2.0 + header_h + preview_row
 	if _hold_panel:
 		_hold_panel.position = Vector2(hold_px, top_y)
-		_hold_panel.size = Vector2(panel_w, hold_h)
+		_hold_panel.size = Vector2(preview_w, hold_h)
 		_size_glass_panel(_hold_panel)
 	if _hold_title_label:
 		_hold_title_label.position = Vector2(hold_px, top_y + pad)
-		_hold_title_label.size = Vector2(panel_w, header_h)
+		_hold_title_label.size = Vector2(preview_w, header_h)
 		_hold_title_label.add_theme_font_size_override("font_size", font_s)
 	if _hold_container:
 		_hold_container.position = Vector2(hold_px, top_y + pad + header_h)
