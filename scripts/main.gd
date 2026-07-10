@@ -93,6 +93,11 @@ var _ghost_container: Node2D = null
 var _ghost_cells: Array[ColorRect] = []
 var _ghost_materials: Array[ShaderMaterial] = []
 
+# HUD panels (glass frames behind the stat/Hold/Next groups)
+var _stats_panel: Panel = null
+var _hold_panel: Panel = null
+var _next_panel: Panel = null
+
 # HUD Labels
 var _score_label: Label = null
 var _lines_label: Label = null
@@ -115,6 +120,7 @@ var _next_materials: Array = []
 # Background fallback
 var _bg_fallback_rect: ColorRect = null
 var _bg_bake_size: Vector2 = Vector2.ZERO
+var _bg_baked_tex: Texture2D = null
 
 # Water splash ripples (piece lock). Each entry is a Dictionary:
 # cells: PackedVector2Array (4 cell centers, board px, origin at board
@@ -409,8 +415,29 @@ func _bake_board_bg() -> void:
 	img.srgb_to_linear()
 	img.generate_mipmaps()
 
-	_board_material.set_shader_parameter("bg_tex", ImageTexture.create_from_image(img))
+	var baked := ImageTexture.create_from_image(img)
+	_board_material.set_shader_parameter("bg_tex", baked)
 	_bg_bake_size = vp_size
+	_bg_baked_tex = baked
+	_apply_glass_to_pieces(baked)
+
+
+func _apply_glass_to_pieces(baked: Texture2D) -> void:
+	"""Give every piece/ghost/hold/next cell the same frosted background the
+	board glass uses, so they read as matching liquid-glass blocks."""
+	var mats: Array = []
+	mats.append_array(_piece_materials)
+	mats.append_array(_ghost_materials)
+	mats.append_array(_hold_materials)
+	for row in _next_materials:
+		mats.append_array(row)
+	for m in mats:
+		if m == null:
+			continue
+		m.set_shader_parameter("bg_tex", baked)
+		m.set_shader_parameter("bg_dim", 0.35)
+		m.set_shader_parameter("tint_alpha", 0.7)
+		m.set_shader_parameter("block_emission", 1.2)
 
 # ═══════════════════════════════════════════════════════════
 # ── Shader rendering node creation ──
@@ -421,12 +448,16 @@ func _create_render_nodes() -> void:
 	_piece_shader = load("res://shaders/piece.gdshader") as Shader
 
 	_create_board_node()
+	_create_hud_panels()   # behind the labels/previews (added first)
 	_create_piece_cells()
 	_create_ghost_cells()
 	_create_hud_labels()
 	_create_hold_preview()
 	_create_next_preview()
 	_create_bg_fallback()
+	# bg was baked in _create_board_node before these cells existed — apply now
+	if _bg_baked_tex:
+		_apply_glass_to_pieces(_bg_baked_tex)
 	_position_all_nodes()
 	_update_board_texture()
 
@@ -537,6 +568,43 @@ func _create_ghost_cells() -> void:
 		_ghost_cells.append(cr)
 		_ghost_materials.append(cr.material as ShaderMaterial)
 
+func _hud_panel_style() -> StyleBoxFlat:
+	var s := StyleBoxFlat.new()
+	s.bg_color = Color(0.07, 0.09, 0.15, 0.74)
+	s.corner_radius_top_left = 12
+	s.corner_radius_top_right = 12
+	s.corner_radius_bottom_left = 12
+	s.corner_radius_bottom_right = 12
+	s.border_width_left = 1
+	s.border_width_right = 1
+	s.border_width_top = 1
+	s.border_width_bottom = 1
+	s.border_color = Color(1, 1, 1, 0.13)
+	s.shadow_size = 8
+	s.shadow_offset = Vector2(0, 3)
+	s.shadow_color = Color(0, 0, 0, 0.4)
+	s.anti_aliasing = true
+	return s
+
+func _create_hud_panels() -> void:
+	_stats_panel = Panel.new()
+	_stats_panel.name = "StatsPanel"
+	_stats_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_stats_panel.add_theme_stylebox_override("panel", _hud_panel_style())
+	_game_layer.add_child(_stats_panel)
+
+	_hold_panel = Panel.new()
+	_hold_panel.name = "HoldPanel"
+	_hold_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_hold_panel.add_theme_stylebox_override("panel", _hud_panel_style())
+	_game_layer.add_child(_hold_panel)
+
+	_next_panel = Panel.new()
+	_next_panel.name = "NextPanel"
+	_next_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_next_panel.add_theme_stylebox_override("panel", _hud_panel_style())
+	_game_layer.add_child(_next_panel)
+
 func _create_hud_labels() -> void:
 	var font := ThemeDB.fallback_font
 	_score_label = Label.new()
@@ -565,16 +633,18 @@ func _create_hud_labels() -> void:
 
 	_hold_title_label = Label.new()
 	_hold_title_label.name = "HoldTitleLabel"
-	_hold_title_label.text = "Hold"
+	_hold_title_label.text = "HOLD"
+	_hold_title_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_hold_title_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_hold_title_label.add_theme_color_override("font_color", Color.WHITE)
+	_hold_title_label.add_theme_color_override("font_color", Color(1, 1, 1, 0.55))
 	_game_layer.add_child(_hold_title_label)
 
 	_next_title_label = Label.new()
 	_next_title_label.name = "NextTitleLabel"
-	_next_title_label.text = "Next:"
+	_next_title_label.text = "NEXT"
+	_next_title_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_next_title_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_next_title_label.add_theme_color_override("font_color", Color.WHITE)
+	_next_title_label.add_theme_color_override("font_color", Color(1, 1, 1, 0.55))
 	_game_layer.add_child(_next_title_label)
 
 func _create_hold_preview() -> void:
@@ -651,6 +721,11 @@ func _set_game_nodes_visible(v: bool) -> void:
 		_piece_container.visible = v
 	if _ghost_container:
 		_ghost_container.visible = v
+	if _stats_panel:
+		_stats_panel.visible = v
+		_hold_panel.visible = v
+		# Next panel hidden during replay (its queue isn't recorded)
+		_next_panel.visible = v and state != State.REPLAY
 	if _score_label:
 		_score_label.visible = v
 		_lines_label.visible = v
@@ -869,49 +944,66 @@ func _position_all_nodes() -> void:
 		_board_rect.position = Vector2(bx, by)
 		_board_rect.size = Vector2(board_w, board_h)
 
-	# HUD labels (right side); clamp so they never run off narrow screens —
-	# on portrait they overlay the glass board's right edge instead
+	# ── HUD: glass panels with content inside ──
 	var vw: float = get_viewport_rect().size.x
-	var hud_w: float = maxf(cs * 2.5, 120.0 * _font_scale)
-	var right_x: float = minf(bx + board_w + margin, vw - hud_w - margin)
+	var pad: float = maxf(8.0, cs * 0.3)
+	var hud_w: float = maxf(cs * 2.9, 132.0 * _font_scale)
+	var panel_w: float = hud_w + pad * 2.0
 	var line_h: float = font_m + 8
-	var score_y: float = by + cs + font_m
+	var header_h: float = font_s + 8.0
+	var preview_cs: float = maxf(4.0, cs / 2.0)
+	var preview_row: float = preview_cs * 2.6   # per next/hold preview block
+	var top_y: float = by + cs * 0.55
 
-	if _score_label:
-		_score_label.position = Vector2(right_x, score_y)
-		_score_label.add_theme_font_size_override("font_size", font_m)
-	if _lines_label:
-		_lines_label.position = Vector2(right_x, score_y + line_h)
-		_lines_label.add_theme_font_size_override("font_size", font_m)
-	if _level_label:
-		_level_label.position = Vector2(right_x, score_y + line_h * 2)
-		_level_label.add_theme_font_size_override("font_size", font_m)
-	if _time_label:
-		_time_label.position = Vector2(right_x, score_y + line_h * 3)
-		_time_label.add_theme_font_size_override("font_size", font_m)
+	# Right-side panels (stats + next), clamped to stay on screen
+	var right_px: float = minf(bx + board_w + margin, vw - panel_w - margin)
+	var content_x: float = right_px + pad
+	# center a ~3-wide preview block within the panel
+	var preview_x: float = right_px + panel_w * 0.5 - preview_cs * 1.5
 
-	# Hold (left side)
-	var hold_x: float = bx - cs * 2 - margin
-	if hold_x < 0:
-		hold_x = margin
-	if _hold_title_label:
-		_hold_title_label.position = Vector2(hold_x, by + cs + font_s)
-		_hold_title_label.add_theme_font_size_override("font_size", font_s)
-	if _hold_container:
-		_hold_container.position = Vector2(hold_x, by + cs + font_s + font_m + margin)
+	# Stats panel
+	var stats_h: float = pad * 2.0 + line_h * 4.0
+	if _stats_panel:
+		_stats_panel.position = Vector2(right_px, top_y)
+		_stats_panel.size = Vector2(panel_w, stats_h)
+	var sy: float = top_y + pad
+	for i in [_score_label, _lines_label, _level_label, _time_label]:
+		if i == null:
+			continue
+		i.add_theme_font_size_override("font_size", font_m)
+	if _score_label: _score_label.position = Vector2(content_x, sy)
+	if _lines_label: _lines_label.position = Vector2(content_x, sy + line_h)
+	if _level_label: _level_label.position = Vector2(content_x, sy + line_h * 2.0)
+	if _time_label: _time_label.position = Vector2(content_x, sy + line_h * 3.0)
 
-	# Next (right side, below score)
-	var next_y: float = score_y + line_h * 3 + margin
-	if sprint_target > 0:
-		next_y += line_h
+	# Next panel (below stats)
+	var next_top: float = top_y + stats_h + margin
+	var next_h: float = pad * 2.0 + header_h + preview_row * 3.0
+	if _next_panel:
+		_next_panel.position = Vector2(right_px, next_top)
+		_next_panel.size = Vector2(panel_w, next_h)
 	if _next_title_label:
-		_next_title_label.position = Vector2(right_x, next_y)
+		_next_title_label.position = Vector2(right_px, next_top + pad)
+		_next_title_label.size = Vector2(panel_w, header_h)
 		_next_title_label.add_theme_font_size_override("font_size", font_s)
 	if _next_container:
-		_next_container.position = Vector2(right_x, next_y + font_s + margin)
-		var preview_spacing: float = cs * 3
+		_next_container.position = Vector2(preview_x, next_top + pad + header_h + preview_cs * 0.4)
 		for i in range(_next_sub_containers.size()):
-			_next_sub_containers[i].position = Vector2(0, i * preview_spacing)
+			_next_sub_containers[i].position = Vector2(0, i * preview_row)
+
+	# Hold panel (left side)
+	var hold_px: float = maxf(margin, bx - panel_w - margin)
+	var hold_h: float = pad * 2.0 + header_h + preview_row
+	var hold_preview_x: float = hold_px + panel_w * 0.5 - preview_cs * 1.5
+	if _hold_panel:
+		_hold_panel.position = Vector2(hold_px, top_y)
+		_hold_panel.size = Vector2(panel_w, hold_h)
+	if _hold_title_label:
+		_hold_title_label.position = Vector2(hold_px, top_y + pad)
+		_hold_title_label.size = Vector2(panel_w, header_h)
+		_hold_title_label.add_theme_font_size_override("font_size", font_s)
+	if _hold_container:
+		_hold_container.position = Vector2(hold_preview_x, top_y + pad + header_h + preview_cs * 0.4)
 
 	# Board shader geometry + re-bake blurred bg if the screen size changed
 	if _board_material:
