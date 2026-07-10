@@ -98,11 +98,14 @@ var _ghost_container: Node2D = null
 var _ghost_cells: Array[ColorRect] = []
 var _ghost_materials: Array[ShaderMaterial] = []
 
-# HUD panels (liquid-glass frames behind the stat/Hold/Next groups)
+# HUD panels. _stats/_hold/_next are invisible layout holders that just carry
+# each group's rect; the single _hud_glass surface draws all of them as one
+# merged (metaball) piece of liquid glass so close panels bridge together.
 var _stats_panel: ColorRect = null
 var _hold_panel: ColorRect = null
 var _next_panel: ColorRect = null
-var _hud_panel_shader: Shader = null
+var _hud_glass: ColorRect = null
+var _hud_glass_shader: Shader = null
 # Preview geometry (set in _position_all_nodes, used to center pieces)
 var _hud_panel_w: float = 0.0
 var _hud_preview_cs: float = 0.0
@@ -450,10 +453,10 @@ func _apply_glass_to_pieces(baked: Texture2D) -> void:
 		m.set_shader_parameter("bg_dim", 0.35)
 		m.set_shader_parameter("tint_alpha", 0.7)
 		m.set_shader_parameter("block_emission", 1.2)
-	# HUD glass panels share the same frosted background
-	for panel in [_stats_panel, _hold_panel, _next_panel]:
-		if panel and panel.material:
-			panel.material.set_shader_parameter("bg_tex", baked)
+	# The merged HUD glass shares the same frosted background as the board
+	if _hud_glass and _hud_glass.material:
+		_hud_glass.material.set_shader_parameter("bg_tex", baked)
+		_hud_glass.material.set_shader_parameter("bg_dim", 0.35)
 
 # ═══════════════════════════════════════════════════════════
 # ── Shader rendering node creation ──
@@ -610,18 +613,72 @@ func _size_glass_panel(panel: ColorRect) -> void:
 		panel.material.set_shader_parameter("rect_px", panel.size)
 		panel.material.set_shader_parameter("corner_px", 18.0)
 
+func _update_hud_glass() -> void:
+	"""Feed the visible panel rects into the single merged-glass surface. The
+	covering quad spans their bounding box (grown for the fillet); the shader
+	smooth-unions the rects so close panels bridge into one piece of glass."""
+	if _hud_glass == null or _hud_glass.material == null:
+		return
+	var panels: Array[ColorRect] = []
+	for p in [_stats_panel, _next_panel, _hold_panel]:
+		if p and p.visible:
+			panels.append(p)
+	if panels.is_empty():
+		_hud_glass.visible = false
+		return
+	_hud_glass.visible = true
+
+	# Covering quad = union bbox grown to hold the merge fillet + rim.
+	var pad: float = 44.0
+	var mn := Vector2(INF, INF)
+	var mx := Vector2(-INF, -INF)
+	for p in panels:
+		mn = mn.min(p.position)
+		mx = mx.max(p.position + p.size)
+	mn -= Vector2(pad, pad)
+	mx += Vector2(pad, pad)
+	_hud_glass.position = mn
+	_hud_glass.size = mx - mn
+
+	# Pack panel rects as (center_x, center_y, half_w, half_h); pad the rest
+	# far off-screen so the fixed-6 shader loop ignores them.
+	var rects: Array = []
+	for i in range(6):
+		if i < panels.size():
+			var p: ColorRect = panels[i]
+			var c: Vector2 = p.position + p.size * 0.5
+			rects.append(Vector4(c.x, c.y, p.size.x * 0.5, p.size.y * 0.5))
+		else:
+			rects.append(Vector4(-99999.0, -99999.0, 0.01, 0.01))
+
+	var m: ShaderMaterial = _hud_glass.material
+	m.set_shader_parameter("origin_px", mn)
+	m.set_shader_parameter("rect_px", _hud_glass.size)
+	m.set_shader_parameter("rects", rects)
+	m.set_shader_parameter("corner_px", 18.0)
+
 func _make_glass_panel(pname: String) -> ColorRect:
+	# Invisible layout holder: it carries a panel's position/size only; the
+	# shared _hud_glass surface renders the actual glass for all panels merged.
 	var cr := ColorRect.new()
 	cr.name = pname
+	cr.color = Color(0, 0, 0, 0)
 	cr.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	var mat := ShaderMaterial.new()
-	mat.shader = _hud_panel_shader
-	cr.material = mat
 	_game_layer.add_child(cr)
 	return cr
 
 func _create_hud_panels() -> void:
-	_hud_panel_shader = load("res://shaders/glass_panel.gdshader") as Shader
+	# One covering quad that draws every HUD panel as a single merged piece of
+	# liquid glass (see _update_hud_glass). Added first so it sits behind the
+	# labels and preview pieces.
+	_hud_glass_shader = load("res://shaders/hud_glass.gdshader") as Shader
+	_hud_glass = ColorRect.new()
+	_hud_glass.name = "HudGlass"
+	_hud_glass.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var mat := ShaderMaterial.new()
+	mat.shader = _hud_glass_shader
+	_hud_glass.material = mat
+	_game_layer.add_child(_hud_glass)
 	_stats_panel = _make_glass_panel("StatsPanel")
 	_hold_panel = _make_glass_panel("HoldPanel")
 	_next_panel = _make_glass_panel("NextPanel")
@@ -767,6 +824,9 @@ func _set_game_nodes_visible(v: bool) -> void:
 		_next_title_label.visible = v and state != State.REPLAY
 	if _bg_fallback_rect:
 		_bg_fallback_rect.visible = v and not _bg_ok
+	# Recompute the merged glass once holders' visibility settled (e.g. the
+	# Next panel drops out during replay).
+	_update_hud_glass()
 
 
 func _update_piece_positions() -> void:
@@ -1073,6 +1133,7 @@ func _position_all_nodes() -> void:
 	if _hold_container:
 		_hold_container.position = Vector2(hold_px, top_y + pad + header_h)
 	_update_hold_preview()
+	_update_hud_glass()
 
 	# Board shader geometry + re-bake blurred bg if the screen size changed
 	if _board_material:
