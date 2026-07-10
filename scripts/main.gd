@@ -604,7 +604,7 @@ func _create_ghost_cells() -> void:
 func _size_glass_panel(panel: ColorRect) -> void:
 	if panel.material:
 		panel.material.set_shader_parameter("rect_px", panel.size)
-		panel.material.set_shader_parameter("corner_px", 12.0)
+		panel.material.set_shader_parameter("corner_px", 18.0)
 
 func _make_glass_panel(pname: String) -> ColorRect:
 	var cr := ColorRect.new()

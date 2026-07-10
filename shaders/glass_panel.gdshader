@@ -15,9 +15,14 @@ uniform vec4 border_color : source_color = vec4(1.0, 1.0, 1.0, 0.22);
 uniform float border_px : hint_range(0.0, 6.0) = 1.5;
 uniform float warp : hint_range(0.0, 20.0) = 6.0;
 
+// Squircle SDF (exponent 2.5) — the Apple continuous corner, identical to
+// the board/button/piece corners, so the panels round the same way.
 float rbox(vec2 p, vec2 b, float r) {
 	vec2 q = abs(p) - b + r;
-	return min(max(q.x, q.y), 0.0) + length(max(q, vec2(0.0))) - r;
+	float d = min(max(q.x, q.y), 0.0);
+	vec2 corner = max(q, vec2(0.0));
+	float corner_dist = pow(pow(corner.x, 2.5) + pow(corner.y, 2.5), 1.0 / 2.5);
+	return d + corner_dist - r;
 }
 
 void fragment() {
