@@ -9,24 +9,23 @@ signal replay_requested(index: int)
 signal closed
 
 const SPRINT_TARGETS: Array[int] = [20, 40, 100, 200]
-const ROW_BG := Color(0.16, 0.19, 0.29)
-const ROW_BG_HOVER := Color(0.22, 0.26, 0.38)
-const CORNER := 10
+const ROW_TINT := Color(0.20, 0.24, 0.40)
+const CARD_TINT := Color(0.20, 0.24, 0.40)
+const PANEL_TINT := Color(0.10, 0.13, 0.22)
+const BTN_CORNER := 0.32
 
 
 func _ready() -> void:
 	mouse_filter = Control.MOUSE_FILTER_STOP
 	add_to_group("menu_input_blockers")
 
-	var panel_style := _flat(Color(0.11, 0.13, 0.20, 0.97), 16)
-	panel_style.border_color = Color(1, 1, 1, 0.10)
-	panel_style.border_width_left = 1
-	panel_style.border_width_right = 1
-	panel_style.border_width_top = 1
-	panel_style.border_width_bottom = 1
-	%Panel.add_theme_stylebox_override("panel", panel_style)
+	# Transparent stylebox so only the glass body shows through the panel
+	var clear := StyleBoxEmpty.new()
+	%Panel.add_theme_stylebox_override("panel", clear)
+	GlassUI.panelize(%Panel, PANEL_TINT, 0.08, 0.62)
 
-	_style_text_button(%BackBtn, Color(0.24, 0.28, 0.42))
+	GlassUI.buttonize(%BackBtn, Color(0.24, 0.28, 0.44), BTN_CORNER)
+	%BackBtn.add_theme_font_size_override("font_size", 18)
 	%BackBtn.pressed.connect(func(): closed.emit())
 
 	%Title.add_theme_font_size_override("font_size", 30)
@@ -52,7 +51,8 @@ func _build_records(gh: Node) -> void:
 	for target in SPRINT_TARGETS:
 		var best: float = gh.best_time(target)
 		var card := PanelContainer.new()
-		card.add_theme_stylebox_override("panel", _flat(ROW_BG, CORNER))
+		card.add_theme_stylebox_override("panel", StyleBoxEmpty.new())
+		GlassUI.panelize(card, CARD_TINT, 0.28)
 		var vb := VBoxContainer.new()
 		vb.add_theme_constant_override("separation", 2)
 		var m := MarginContainer.new()
@@ -100,10 +100,7 @@ func _build_list(gh: Node) -> void:
 func _make_row(e: Dictionary, index: int) -> Button:
 	var btn := Button.new()
 	btn.custom_minimum_size = Vector2(0, 58)
-	btn.add_theme_stylebox_override("normal", _flat(ROW_BG, CORNER))
-	btn.add_theme_stylebox_override("hover", _flat(ROW_BG_HOVER, CORNER))
-	btn.add_theme_stylebox_override("pressed", _flat(ROW_BG_HOVER, CORNER))
-	btn.add_theme_stylebox_override("focus", StyleBoxEmpty.new())
+	GlassUI.buttonize(btn, ROW_TINT, 0.22, false)
 	btn.pressed.connect(func(): replay_requested.emit(index))
 
 	var complete: bool = str(e.get("result", "")) == "complete"
@@ -183,26 +180,6 @@ func _make_row(e: Dictionary, index: int) -> Button:
 
 
 # ── Helpers ──
-
-func _flat(bg: Color, corner: int) -> StyleBoxFlat:
-	var s := StyleBoxFlat.new()
-	s.bg_color = bg
-	s.corner_radius_top_left = corner
-	s.corner_radius_top_right = corner
-	s.corner_radius_bottom_left = corner
-	s.corner_radius_bottom_right = corner
-	s.anti_aliasing = true
-	return s
-
-
-func _style_text_button(btn: Button, bg: Color) -> void:
-	btn.add_theme_stylebox_override("normal", _flat(bg, CORNER))
-	btn.add_theme_stylebox_override("hover", _flat(bg.lightened(0.08), CORNER))
-	btn.add_theme_stylebox_override("pressed", _flat(bg.lightened(0.15), CORNER))
-	btn.add_theme_stylebox_override("focus", StyleBoxEmpty.new())
-	btn.add_theme_font_size_override("font_size", 18)
-	btn.add_theme_color_override("font_color", Color.WHITE)
-
 
 func _fmt_time(seconds: float) -> String:
 	if seconds < 0.0:
