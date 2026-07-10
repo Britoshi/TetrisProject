@@ -661,22 +661,60 @@ func _touch_normal(pos: Vector2, pressed: bool, index: int) -> void:
 		if _buttons_hidden or _menu_mode:
 			return
 
-		for i in range(_btn_rects.size()):
-			if _btn_rects[i].has_point(pos):
-				_haptic_pulse()
-				Input.action_press(_btn_actions[i])
-				_touch_map[index] = i
-				_btn_pressed[i] = true
-				_btn_shaders[i].set_shader_parameter("pressed", 1.0)
-				# Trigger waterdrop wobble at touch point
-				var uv := Vector2((pos.x - _btn_rects[i].position.x) / _btn_rects[i].size.x,
-								  (pos.y - _btn_rects[i].position.y) / _btn_rects[i].size.y)
-				_wobble_touch_uv[i] = uv
-				_wobble_target[i] = 1.0
-				_wobble_event_time[i] = _elapsed
-				return
+		# Snap to the nearest button so taps in the gaps still register
+		var i := _button_at(pos)
+		if i >= 0:
+			_press_touch_button(i, pos, index)
+			return
 	else:
 		_release_normal_touch(index)
+
+
+func _dist_to_rect_sq(p: Vector2, r: Rect2) -> float:
+	"""Squared distance from p to rect r (0 if inside)."""
+	var dx := maxf(maxf(r.position.x - p.x, 0.0), p.x - r.end.x)
+	var dy := maxf(maxf(r.position.y - p.y, 0.0), p.y - r.end.y)
+	return dx * dx + dy * dy
+
+
+func _button_at(pos: Vector2) -> int:
+	"""Button under a touch: exact hit if any, else the NEAREST button as long
+	as the touch is within the button cluster (grown by ~half a button so
+	slipping off the edge still counts). Kills the dead zones between buttons."""
+	if _btn_rects.is_empty():
+		return -1
+	for i in range(_btn_rects.size()):
+		if _btn_rects[i].has_point(pos):
+			return i
+	# Only snap within the cluster's bounding box + a half-button margin
+	var bounds := _btn_rects[0]
+	for i in range(1, _btn_rects.size()):
+		bounds = bounds.merge(_btn_rects[i])
+	var reach := maxf(_btn_rects[0].size.x, _btn_rects[0].size.y) * 0.5
+	if not bounds.grow(reach).has_point(pos):
+		return -1
+	var best := -1
+	var best_d := 1e20
+	for i in range(_btn_rects.size()):
+		var d := _dist_to_rect_sq(pos, _btn_rects[i])
+		if d < best_d:
+			best_d = d
+			best = i
+	return best
+
+
+func _press_touch_button(i: int, pos: Vector2, index: int) -> void:
+	_haptic_pulse()
+	Input.action_press(_btn_actions[i])
+	_touch_map[index] = i
+	_btn_pressed[i] = true
+	_btn_shaders[i].set_shader_parameter("pressed", 1.0)
+	var r := _btn_rects[i]
+	var uv := Vector2(clampf((pos.x - r.position.x) / r.size.x, 0.0, 1.0),
+					  clampf((pos.y - r.position.y) / r.size.y, 0.0, 1.0))
+	_wobble_touch_uv[i] = uv
+	_wobble_target[i] = 1.0
+	_wobble_event_time[i] = _elapsed
 
 
 func _release_normal_touch(index: int) -> void:
@@ -692,17 +730,18 @@ func _release_normal_touch(index: int) -> void:
 
 
 func _drag_normal(pos: Vector2, index: int) -> void:
-	"""Update wobble touch point as finger slides; re-trigger on re-enter, cross-fade between buttons."""
+	"""Slide handling with the same nearest-button snapping as a tap, so a
+	finger crossing the gaps stays on the closest button (Voronoi)."""
 	if not (index in _touch_map):
 		return
 	var ci: int = _touch_map[index]
+	var target := _button_at(pos)
 
-	# Finger is on the same button
-	if _btn_rects[ci].has_point(pos):
-		var uv := Vector2((pos.x - _btn_rects[ci].position.x) / _btn_rects[ci].size.x,
-						  (pos.y - _btn_rects[ci].position.y) / _btn_rects[ci].size.y)
-		_wobble_touch_uv[ci] = uv
-		# Re-trigger press + wobble if we had left this button (target was decaying to 0)
+	# Still on the same (nearest) button — update wobble, re-press if decayed
+	if target == ci:
+		var r := _btn_rects[ci]
+		_wobble_touch_uv[ci] = Vector2(clampf((pos.x - r.position.x) / r.size.x, 0.0, 1.0),
+									   clampf((pos.y - r.position.y) / r.size.y, 0.0, 1.0))
 		if _wobble_target[ci] < 0.5:
 			_haptic_pulse()
 			Input.action_press(_btn_actions[ci])
@@ -712,7 +751,7 @@ func _drag_normal(pos: Vector2, index: int) -> void:
 			_wobble_event_time[ci] = _elapsed
 		return
 
-	# Finger left current button — release action (but keep touch_map for re-entry detection)
+	# Finger left the current button — release it (keep touch_map for re-entry)
 	if _wobble_target[ci] > 0.5:
 		Input.action_release(_btn_actions[ci])
 		_btn_pressed[ci] = false
@@ -720,22 +759,10 @@ func _drag_normal(pos: Vector2, index: int) -> void:
 		_wobble_target[ci] = 0.0
 		_wobble_event_time[ci] = _elapsed
 
-	# Check if finger entered a different button
-	for i in range(_btn_rects.size()):
-		if i != ci and _btn_rects[i].has_point(pos):
-			_haptic_pulse()
-			Input.action_press(_btn_actions[i])
-			_touch_map[index] = i
-			_btn_pressed[i] = true
-			_btn_shaders[i].set_shader_parameter("pressed", 1.0)
-			var uv := Vector2((pos.x - _btn_rects[i].position.x) / _btn_rects[i].size.x,
-							  (pos.y - _btn_rects[i].position.y) / _btn_rects[i].size.y)
-			_wobble_touch_uv[i] = uv
-			_wobble_target[i] = 1.0
-			_wobble_event_time[i] = _elapsed
-			return
-
-	# Finger is in empty space — keep touch_map so re-entry to same button works
+	# Entered a different button — cross-fade to it
+	if target >= 0:
+		_press_touch_button(target, pos, index)
+	# else finger is beyond the cluster — keep touch_map so re-entry works
 
 func set_menu_mode(on: bool) -> void:
 	"""Hide the game buttons on menu screens (gear stays). Called by main.gd."""
