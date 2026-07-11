@@ -68,6 +68,9 @@ var _cell_size: int = 32
 var _board_x: int = 100
 var _board_y: int = 20
 var _font_scale: float = 1.0
+# App UI font (Inter). Labels/buttons/menus inherit it via the project's
+# default theme font; _draw() overlays load it explicitly here.
+var _ui_font: Font = load("res://fonts/Inter.ttf")
 
 # ── Background image ──
 var _bg_layer: CanvasLayer = null
@@ -1045,7 +1048,6 @@ func _create_hud_panels() -> void:
 	_next_panel = _make_glass_panel("NextPanel")
 
 func _create_hud_labels() -> void:
-	var font := ThemeDB.fallback_font
 	_score_label = Label.new()
 	_score_label.name = "ScoreLabel"
 	_score_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -2071,7 +2073,7 @@ func _draw() -> void:
 	var board_height: int = Constants.VISIBLE_ROWS * cs
 	var board_center_x: float = bx + board_width / 2.0
 	var board_center_y: float = by + board_height / 2.0
-	var font = ThemeDB.fallback_font
+	var font: Font = _ui_font if _ui_font else ThemeDB.fallback_font
 
 	# Game over overlay
 	if state == State.GAME_OVER:

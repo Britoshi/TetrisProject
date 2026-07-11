@@ -21,6 +21,10 @@ PieceData="*res://autoload/piece_data.gd"
 GameSettings="*res://autoload/game_settings.gd"
 GameHistory="*res://autoload/game_history.gd"
 
+[gui]
+
+theme/custom_font="res://fonts/Inter.ttf"
+
 [input_devices]
 
 pointing/emulate_touch_from_mouse=true
