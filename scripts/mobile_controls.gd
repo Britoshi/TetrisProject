@@ -385,6 +385,12 @@ func _layout_default() -> void:
 
 	_font_size = maxi(14, int(btn_h * 0.4))
 
+	# Self-heal: _reset_to_defaults clears _btn_rects and refills only the
+	# label/action/color arrays — indexing an empty rects array here aborted
+	# the whole reset and left every button visible but hitbox-less (dead UI).
+	if _btn_rects.size() != DEFAULT_BUTTONS.size():
+		_btn_rects.resize(DEFAULT_BUTTONS.size())
+
 	# Position each button
 	for i in range(DEFAULT_BUTTONS.size()):
 		var col: int = i % COLS
