@@ -459,6 +459,12 @@ func _fit_background() -> void:
 		_bg_video.size = sz
 		_bg_video.position = (vp.size - sz) * 0.5
 
+func _hdr_2d_active() -> bool:
+	"""HDR 2D (linear rendering + bloom) only exists on Forward+/Mobile.
+	The web export falls back to the Compatibility renderer where colors are
+	LDR sRGB — bakes and emission values must adapt or the game looks wrong."""
+	return RenderingServer.get_current_rendering_method() != "gl_compatibility"
+
 func _bake_board_bg() -> void:
 	"""Bake a cover-fitted, heavily blurred copy of the background into an
 	ImageTexture for the board glass shader. Sampled at SCREEN_UV, so it
@@ -518,7 +524,10 @@ func _bake_board_bg() -> void:
 	# HDR 2D renders in linear space. Imported textures get sRGB->linear
 	# automatically, but runtime ImageTextures do NOT — without this the
 	# board shows a double-gamma washed-out (white) background.
-	img.srgb_to_linear()
+	# ONLY under HDR 2D though: the web/Compatibility renderer has no HDR 2D
+	# and renders sRGB directly — linearizing there double-DARKENS all glass.
+	if _hdr_2d_active():
+		img.srgb_to_linear()
 	img.generate_mipmaps()
 
 	# Re-baking a few times per second: update the existing GPU texture in
@@ -547,13 +556,15 @@ func _apply_glass_to_pieces(baked: Texture2D) -> void:
 	mats.append_array(_hold_materials)
 	for row in _next_materials:
 		mats.append_array(row)
+	# Without HDR bloom (web), >1.0 emission just clips channels — keep at 1.0.
+	var emission: float = 1.2 if _hdr_2d_active() else 1.0
 	for m in mats:
 		if m == null:
 			continue
 		m.set_shader_parameter("bg_tex", baked)
 		m.set_shader_parameter("bg_dim", 0.35)
 		m.set_shader_parameter("tint_alpha", 0.7)
-		m.set_shader_parameter("block_emission", 1.2)
+		m.set_shader_parameter("block_emission", emission)
 	# The merged HUD glass shares the same frosted background as the board
 	if _hud_glass and _hud_glass.material:
 		_hud_glass.material.set_shader_parameter("bg_tex", baked)
@@ -636,7 +647,7 @@ func _create_board_node() -> void:
 	_board_material.set_shader_parameter("wave_strength", 0.3)
 	_board_material.set_shader_parameter("wave_speed", 1.0)
 	_board_material.set_shader_parameter("wave_scale", 1.0)
-	_board_material.set_shader_parameter("block_emission", 1.2)
+	_board_material.set_shader_parameter("block_emission", 1.2 if _hdr_2d_active() else 1.0)
 
 	# Colors from Constants.COLORS
 	var c := Constants.COLORS
