@@ -16,19 +16,20 @@ const ROT_L: int = 3   # CCW from spawn (or CW from 180°)
 # from the piece origin position on the grid.
 # The "origin" cell is the cell whose board coordinates the piece tracks.
 # For T/S/Z/J/L it's the center of the 3×3 bounding box.
-# For I it's the 2nd-from-left/top cell of the bar.
+# For I it's cell (1,1) of its 4×4 SRS bounding box (fixed across states).
 # For O it's the top-left cell of the 2×2 block.
 
 const CELLS: Dictionary = {
 	Constants.PieceType.I: [
-		# State 0: horizontal  →  OXXX  origin = 2nd cell
+		# SRS 4×4 box, origin fixed at box cell (1,1).
+		# State 0: horizontal, box row 1
 		[Vector2i(-1, 0), Vector2i(0, 0), Vector2i(1, 0), Vector2i(2, 0)],
-		# State 1: vertical (CW)
+		# State 1 (CW): vertical, box column 2
+		[Vector2i(1, -1), Vector2i(1, 0), Vector2i(1, 1), Vector2i(1, 2)],
+		# State 2 (180°): horizontal, box row 2
+		[Vector2i(-1, 1), Vector2i(0, 1), Vector2i(1, 1), Vector2i(2, 1)],
+		# State 3 (CCW): vertical, box column 1
 		[Vector2i(0, -1), Vector2i(0, 0), Vector2i(0, 1), Vector2i(0, 2)],
-		# State 2: horizontal (180°)  →  XXXO  origin = 2nd from right
-		[Vector2i(-2, 0), Vector2i(-1, 0), Vector2i(0, 0), Vector2i(1, 0)],
-		# State 3: vertical (CCW)
-		[Vector2i(0, -2), Vector2i(0, -1), Vector2i(0, 0), Vector2i(0, 1)],
 	],
 
 	Constants.PieceType.O: [
@@ -51,25 +52,25 @@ const CELLS: Dictionary = {
 	],
 
 	Constants.PieceType.S: [
-		# State 0: horizontal  .XX / XX.
-		[Vector2i(1, 0), Vector2i(0, 0), Vector2i(0, 1), Vector2i(-1, 1)],
-		# State 1: vertical (CW)
+		# State 0: .XX / XX. (rows -1, 0)
+		[Vector2i(0, -1), Vector2i(1, -1), Vector2i(-1, 0), Vector2i(0, 0)],
+		# State 1 (CW): X. / XX / .X in columns 0-1
 		[Vector2i(0, -1), Vector2i(0, 0), Vector2i(1, 0), Vector2i(1, 1)],
-		# State 2: horizontal (180°)  — same shape as state 0
-		[Vector2i(1, 0), Vector2i(0, 0), Vector2i(0, 1), Vector2i(-1, 1)],
-		# State 3: vertical (CCW)  — same shape as state 1
-		[Vector2i(0, -1), Vector2i(0, 0), Vector2i(1, 0), Vector2i(1, 1)],
+		# State 2 (180°): .XX / XX. (rows 0, 1 — one row below state 0)
+		[Vector2i(0, 0), Vector2i(1, 0), Vector2i(-1, 1), Vector2i(0, 1)],
+		# State 3 (CCW): same shape as state 1, one column left
+		[Vector2i(-1, -1), Vector2i(-1, 0), Vector2i(0, 0), Vector2i(0, 1)],
 	],
 
 	Constants.PieceType.Z: [
-		# State 0: horizontal  XX. / .XX
+		# State 0: XX. / .XX (rows -1, 0)
+		[Vector2i(-1, -1), Vector2i(0, -1), Vector2i(0, 0), Vector2i(1, 0)],
+		# State 1 (CW): .X / XX / X. in columns 0-1
+		[Vector2i(1, -1), Vector2i(0, 0), Vector2i(1, 0), Vector2i(0, 1)],
+		# State 2 (180°): XX. / .XX (rows 0, 1 — one row below state 0)
 		[Vector2i(-1, 0), Vector2i(0, 0), Vector2i(0, 1), Vector2i(1, 1)],
-		# State 1: vertical (CW)
-		[Vector2i(1, -1), Vector2i(1, 0), Vector2i(0, 0), Vector2i(0, 1)],
-		# State 2: horizontal (180°)  — same shape as state 0
-		[Vector2i(-1, 0), Vector2i(0, 0), Vector2i(0, 1), Vector2i(1, 1)],
-		# State 3: vertical (CCW)  — same shape as state 1
-		[Vector2i(1, -1), Vector2i(1, 0), Vector2i(0, 0), Vector2i(0, 1)],
+		# State 3 (CCW): same shape as state 1, one column left
+		[Vector2i(0, -1), Vector2i(-1, 0), Vector2i(0, 0), Vector2i(-1, 1)],
 	],
 
 	Constants.PieceType.J: [

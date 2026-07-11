@@ -19,7 +19,10 @@
       "WebSearch",
       "WebFetch(domain:github.com)",
       "WebFetch(domain:godotshaders.com)",
-      "Bash(git push *)"
+      "Bash(git push *)",
+      "Bash(git *)",
+      "WebFetch(domain:tetris.wiki)",
+      "WebFetch(domain:harddrop.com)"
     ]
   }
 }
