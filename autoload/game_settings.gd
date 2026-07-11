@@ -15,11 +15,18 @@ enum BlockStyle {
 const SAVE_PATH := "user://settings.cfg"
 const BLOCK_STYLE_NAMES: Array[String] = ["Separate", "By Piece", "Fused"]
 
+# True while _ready() restores values from disk. Property setters call
+# _save(), and saving mid-load persists half-loaded state — e.g. the
+# block_style setter used to write hud_layout={} to disk before the layout
+# had been read, wiping the player's dragged HUD layout every other launch.
+var _loading: bool = false
+
 var block_style: int = BlockStyle.FUSED:
 	set(v):
 		block_style = clampi(v, 0, BlockStyle.size() - 1)
-		_save()
-		changed.emit()
+		if not _loading:
+			_save()
+			changed.emit()
 
 # Per-panel HUD overrides the player set by dragging. Keyed "stats"/"hold"/
 # "next" → {"x", "y" (top-left as a fraction of the viewport), "s" (scale)}.
@@ -30,10 +37,12 @@ var hud_layout: Dictionary = {}
 func _ready() -> void:
 	var cfg := ConfigFile.new()
 	if cfg.load(SAVE_PATH) == OK:
-		block_style = cfg.get_value("graphics", "block_style", BlockStyle.FUSED)
+		_loading = true
 		var hl = cfg.get_value("hud", "layout", {})
 		if hl is Dictionary:
 			hud_layout = hl
+		block_style = cfg.get_value("graphics", "block_style", BlockStyle.FUSED)
+		_loading = false
 
 
 func get_hud_panel(key: String) -> Dictionary:
