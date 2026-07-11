@@ -72,10 +72,16 @@ var _font_scale: float = 1.0
 # default theme font; _draw() overlays load it explicitly here.
 var _ui_font: Font = load("res://fonts/Inter.ttf")
 
-# ── Background image ──
+# ── Background image / video ──
 var _bg_layer: CanvasLayer = null
 var _bg_rect: TextureRect = null
 var _bg_ok: bool = false
+# Looping video background (PNG above stays as poster/fallback frame). The
+# glass shaders sample a baked copy, re-baked from the current video frame a
+# few times per second so the refraction drifts with the video.
+var _bg_video: VideoStreamPlayer = null
+var _video_bake_acc: float = 0.0
+const VIDEO_BAKE_INTERVAL := 0.25
 
 # ── Shader rendering nodes ──
 # Board (data texture + shader)
@@ -409,12 +415,49 @@ func _setup_background() -> void:
 	else:
 		push_warning("Background image not found, using dark fill fallback")
 
+	# Looping video on top of the poster frame (which stays as fallback).
+	var stream := load("res://videos/azure-horizon.ogv") as VideoStream
+	if stream:
+		_bg_video = VideoStreamPlayer.new()
+		_bg_video.name = "BackgroundVideo"
+		_bg_video.stream = stream
+		_bg_video.expand = true
+		_bg_video.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		if "loop" in _bg_video:
+			_bg_video.loop = true
+		# Belt & braces: restart on finish even without the loop property.
+		_bg_video.finished.connect(func():
+			if _bg_video:
+				_bg_video.play())
+		_bg_layer.add_child(_bg_video)
+		_bg_video.play()
+		_fit_background()
+		print("Background video playing")
+	else:
+		push_warning("Background video not found — static image only")
+
 func _fit_background() -> void:
-	if not _bg_ok or _bg_rect == null:
+	if _bg_rect == null:
 		return
 	var vp := get_viewport_rect()
-	_bg_rect.position = Vector2.ZERO
-	_bg_rect.size = vp.size
+	if _bg_ok:
+		_bg_rect.position = Vector2.ZERO
+		_bg_rect.size = vp.size
+	# Cover-fit the video (KEEP_ASPECT_COVERED by hand: VideoStreamPlayer's
+	# expand stretches, so size the control to cover and center the overflow).
+	if _bg_video:
+		var va := 1280.0 / 720.0
+		var vt := _bg_video.get_video_texture()
+		if vt and vt.get_size().y > 0:
+			va = vt.get_size().x / vt.get_size().y
+		var sa: float = vp.size.x / maxf(vp.size.y, 1.0)
+		var sz: Vector2
+		if sa > va:
+			sz = Vector2(vp.size.x, vp.size.x / va)
+		else:
+			sz = Vector2(vp.size.y * va, vp.size.y)
+		_bg_video.size = sz
+		_bg_video.position = (vp.size - sz) * 0.5
 
 func _bake_board_bg() -> void:
 	"""Bake a cover-fitted, heavily blurred copy of the background into an
@@ -428,9 +471,15 @@ func _bake_board_bg() -> void:
 		return
 
 	var img: Image = null
-	var tex := load("res://videos/azure-horizon.png") as Texture2D
-	if tex:
-		img = tex.get_image()
+	# Prefer the live video frame; fall back to the poster PNG.
+	if _bg_video and _bg_video.is_playing():
+		var vt := _bg_video.get_video_texture()
+		if vt:
+			img = vt.get_image()
+	if img == null:
+		var tex := load("res://videos/azure-horizon.png") as Texture2D
+		if tex:
+			img = tex.get_image()
 	if img != null and img.is_compressed():
 		img.decompress()
 
@@ -472,6 +521,14 @@ func _bake_board_bg() -> void:
 	img.srgb_to_linear()
 	img.generate_mipmaps()
 
+	# Re-baking a few times per second: update the existing GPU texture in
+	# place when the size matches (no reallocation, no re-binding shader params).
+	if _bg_baked_tex is ImageTexture \
+			and (_bg_baked_tex as ImageTexture).get_size() == Vector2(img.get_size()) \
+			and (_bg_baked_tex as ImageTexture).get_format() == img.get_format():
+		(_bg_baked_tex as ImageTexture).update(img)
+		_bg_bake_size = vp_size
+		return
 	var baked := ImageTexture.create_from_image(img)
 	_board_material.set_shader_parameter("bg_tex", baked)
 	if _board_overlay_material:
@@ -1563,6 +1620,14 @@ func _process(delta: float) -> void:
 
 	# HUD drag-to-rearrange: long-press arming, ripple/highlight animation.
 	_hud_edit_tick(delta)
+
+	# Refresh the glass shaders' baked background from the playing video a few
+	# times per second — the frosted refraction drifts along with the video.
+	if _bg_video and _bg_video.is_playing():
+		_video_bake_acc += delta
+		if _video_bake_acc >= VIDEO_BAKE_INTERVAL:
+			_video_bake_acc = 0.0
+			_bake_board_bg()
 
 	# Overlays (game over, sprint complete) still use _draw()
 	if state == State.GAME_OVER or state == State.SPRINT_COMPLETE:
