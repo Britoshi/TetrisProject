@@ -12,6 +12,7 @@ extends Control
 signal edit_layout_requested
 signal reset_requested
 signal hud_reset_requested
+signal quit_to_menu_requested
 signal size_stepped(direction: float)
 signal aspect_stepped(direction: float)
 signal buttons_visible_toggled(buttons_visible: bool)
@@ -47,6 +48,7 @@ func _ready() -> void:
 	%Panel.add_child(panel_glass)
 	%Panel.move_child(panel_glass, 0)
 
+	_glassify(%QuitBtn, TINT_RESET)
 	_glassify(%EditBtn, TINT_NEUTRAL)
 	_glassify(%ResetBtn, TINT_RESET)
 	_glassify(%HudResetBtn, TINT_RESET)
@@ -61,6 +63,7 @@ func _ready() -> void:
 	var bs := _glassify(%BlockStyleBtn, TINT_NEUTRAL)
 	_block_style_label = bs["label"]
 
+	%QuitBtn.pressed.connect(func(): quit_to_menu_requested.emit())
 	%EditBtn.pressed.connect(func(): edit_layout_requested.emit())
 	%ResetBtn.pressed.connect(func(): reset_requested.emit())
 	%HudResetBtn.pressed.connect(func(): hud_reset_requested.emit())
@@ -88,11 +91,13 @@ func _refresh_block_style() -> void:
 		_block_style_label.text = gs.block_style_name()
 
 
-func setup(size_mult: float, aspect: float, buttons_visible: bool) -> void:
+func setup(size_mult: float, aspect: float, buttons_visible: bool, in_game: bool = true) -> void:
 	"""Sync the whole panel to the controller's current state. Call before showing."""
 	update_values(size_mult, aspect)
 	%ShowButtonsToggle.set_pressed_no_signal(buttons_visible)
 	_sync_toggle(buttons_visible)
+	# "Quit to Menu" only makes sense during a game, not on the menu itself.
+	%QuitBtn.visible = in_game
 
 
 func update_values(size_mult: float, aspect: float) -> void:

@@ -12,6 +12,8 @@ extends Control
 
 # Forwarded from the settings panel so main.gd can reset the HUD panel layout.
 signal hud_reset_requested
+# Forwarded from the settings panel: leave the current game for the sprint menu.
+signal quit_to_menu_requested
 
 
 # ── Layout constants ──
@@ -807,13 +809,14 @@ func _open_settings() -> void:
 		_settings_ui.edit_layout_requested.connect(_on_settings_edit_layout)
 		_settings_ui.reset_requested.connect(_on_settings_reset)
 		_settings_ui.hud_reset_requested.connect(_on_settings_hud_reset)
+		_settings_ui.quit_to_menu_requested.connect(_on_settings_quit_to_menu)
 		_settings_ui.size_stepped.connect(_on_settings_size_stepped)
 		_settings_ui.aspect_stepped.connect(_on_settings_aspect_stepped)
 		_settings_ui.buttons_visible_toggled.connect(_on_settings_buttons_toggled)
 		_settings_ui.closed.connect(_close_settings)
 		# Sibling on the CanvasLayer so it draws (and takes input) above the buttons
 		get_parent().add_child(_settings_ui)
-	_settings_ui.setup(_btn_size_mult, _btn_aspect, not _buttons_hidden)
+	_settings_ui.setup(_btn_size_mult, _btn_aspect, not _buttons_hidden, not _menu_mode)
 	_settings_ui.visible = true
 
 
@@ -841,6 +844,12 @@ func _on_settings_reset() -> void:
 func _on_settings_hud_reset() -> void:
 	_haptic_pulse()
 	hud_reset_requested.emit()
+
+
+func _on_settings_quit_to_menu() -> void:
+	_haptic_pulse()
+	_close_settings()
+	quit_to_menu_requested.emit()
 
 
 func _on_settings_size_stepped(direction: float) -> void:

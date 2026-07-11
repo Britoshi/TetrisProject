@@ -206,6 +206,8 @@ func _ready() -> void:
 	_mobile_controls = get_node_or_null("MobileControls/ButtonPanel")
 	if _mobile_controls and _mobile_controls.has_signal("hud_reset_requested"):
 		_mobile_controls.hud_reset_requested.connect(_on_hud_reset_requested)
+	if _mobile_controls and _mobile_controls.has_signal("quit_to_menu_requested"):
+		_mobile_controls.quit_to_menu_requested.connect(_on_quit_to_menu)
 	_game_settings = get_node_or_null("/root/GameSettings")
 	if _game_settings:
 		_game_settings.changed.connect(_update_board_texture)
@@ -1586,7 +1588,7 @@ func _process_playing(delta: float) -> void:
 		_try_hold()
 
 	if Input.is_action_just_pressed("tetris_restart"):
-		_restart()
+		_restart_run()
 		return
 
 	# DAS left
@@ -1806,9 +1808,9 @@ func _process_line_clear(delta: float) -> void:
 			_spawn_next_piece()
 
 func _process_game_over(_delta: float) -> void:
-	# Hard drop or restart returns to sprint menu
+	# R / hard drop restarts the run; leave via the Esc menu (Quit to Menu).
 	if Input.is_action_just_pressed("tetris_hard_drop") or Input.is_action_just_pressed("tetris_restart"):
-		_restart()
+		_restart_run()
 
 # ── Actions ──
 
@@ -1935,6 +1937,21 @@ func _do_clear_lines() -> void:
 
 func _restart() -> void:
 	_restart_game_only()
+	_show_menu()
+
+func _restart_run() -> void:
+	"""R — restart the current run from scratch (same target) and keep playing.
+	Leaving to the menu is done via the Esc/settings menu (Quit to Menu)."""
+	if sprint_target > 0:
+		_start_sprint(sprint_target)
+	else:
+		sprint_time = 0.0
+		_restart_game_only()
+		_position_all_nodes()
+
+func _on_quit_to_menu() -> void:
+	"""Esc/settings → Quit to Menu: abandon the current run, back to the menu."""
+	_recording = false
 	_show_menu()
 
 func _show_menu() -> void:
