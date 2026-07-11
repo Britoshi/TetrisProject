@@ -133,7 +133,7 @@ var _hud_default: Dictionary = {}
 const _HUD_KEYS: Array[String] = ["stats", "next", "hold"]
 const _HUD_LONG_PRESS := 0.4      # seconds held to enter edit mode
 const _HUD_MOVE_SLOP := 12.0      # px of motion that cancels the long-press
-const _HUD_CORNER_GRAB := 30.0    # px hit radius around a corner handle
+const _HUD_CORNER_GRAB := 38.0    # px hit radius around a corner handle
 const _HUD_MIN_SCALE := 0.55
 const _HUD_MAX_SCALE := 2.4
 var _hud_edit_key: String = ""    # panel currently in edit mode ("" = none)
@@ -856,6 +856,19 @@ func _hud_corner_at(key: String, pos: Vector2) -> int:
 			return i
 	return -1
 
+func _hud_panel_near(pos: Vector2) -> String:
+	"""Panel whose body contains pos, else one whose corner zone does ("" if
+	neither). Corner grabs naturally land ON/just outside the edge — a plain
+	rect test misses them, which made corner-first presses impossible."""
+	var k := _hud_panel_at(pos)
+	if k != "":
+		return k
+	for key in _HUD_KEYS:
+		var p := _hud_panel_node(key)
+		if p and p.visible and _hud_corner_at(key, pos) >= 0:
+			return key
+	return ""
+
 func _hud_current_scale(key: String) -> float:
 	var o = _hud_over.get(key, null)
 	if o is Dictionary:
@@ -893,17 +906,21 @@ func _hud_pointer_down(pos: Vector2) -> bool:
 		if p and Rect2(p.position, p.size).has_point(pos):
 			_hud_start_move(pos)
 			return true
-		var other := _hud_panel_at(pos)
+		var other := _hud_panel_near(pos)
 		if other != "" and other != _hud_edit_key:
 			_hud_edit_key = other
 			_hud_trigger_ripple(pos)
-			_hud_start_move(pos)
+			var oc := _hud_corner_at(other, pos)
+			if oc >= 0:
+				_hud_start_resize(oc, pos)
+			else:
+				_hud_start_move(pos)
 			return true
 		_hud_finish_edit()
 		return true
-	# Not editing: arm a long-press over a panel (don't consume — a quick tap
-	# should still behave normally).
-	var k := _hud_panel_at(pos)
+	# Not editing: arm a long-press over a panel or its corner zone (don't
+	# consume — a quick tap should still behave normally).
+	var k := _hud_panel_near(pos)
 	if k == "":
 		return false
 	_hud_press_key = k
@@ -989,7 +1006,13 @@ func _hud_enter_edit(key: String, pos: Vector2) -> void:
 	_hud_edit_key = key
 	_hud_press_key = ""
 	_hud_trigger_ripple(pos)
-	_hud_start_move(pos)   # long-press flows straight into a move
+	# Long-press flows straight into a drag: a resize when the hold began on
+	# a corner handle, a move otherwise (so one gesture does either).
+	var c := _hud_corner_at(key, pos)
+	if c >= 0:
+		_hud_start_resize(c, pos)
+	else:
+		_hud_start_move(pos)
 
 func _hud_finish_edit() -> void:
 	_hud_edit_key = ""
