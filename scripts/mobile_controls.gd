@@ -787,6 +787,12 @@ func buttons_visible() -> bool:
 	return not _buttons_hidden and not _menu_mode
 
 
+func panel_top() -> float:
+	"""Screen-space y of the button panel's top edge (for the silhouette
+	outline overlay, which fades in below this line)."""
+	return _panel_rect.position.y
+
+
 # ── SETTINGS (separate scene: scenes/mobile_settings.tscn) ──
 
 # Public wrappers so main.gd can open/close settings (e.g. from Esc).

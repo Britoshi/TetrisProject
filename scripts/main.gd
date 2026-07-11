@@ -92,6 +92,10 @@ var _board_texture: ImageTexture = null
 # Blocks-only copy of the board on a layer ABOVE the mobile buttons, so
 # placed blocks stay visible over the buttons (see board.gdshader overlay_mode)
 var _board_overlay_rect: ColorRect = null
+# Combined-form outline (board ∪ HUD panels as ONE silhouette) drawn over the
+# touch buttons so the glass shape stays readable where they cover it.
+var _silhouette_rect: ColorRect = null
+var _silhouette_material: ShaderMaterial = null
 var _board_overlay_material: ShaderMaterial = null
 var _board_overlay_layer: CanvasLayer = null
 const BOARD_TEX_W: int = 10
@@ -698,6 +702,15 @@ func _create_board_overlay() -> void:
 	_board_overlay_rect.material = _board_overlay_material
 	_board_overlay_layer.add_child(_board_overlay_rect)
 
+	# Combined silhouette outline (full screen, same over-the-buttons layer)
+	_silhouette_material = ShaderMaterial.new()
+	_silhouette_material.shader = load("res://shaders/silhouette_outline.gdshader") as Shader
+	_silhouette_rect = ColorRect.new()
+	_silhouette_rect.name = "SilhouetteOutline"
+	_silhouette_rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_silhouette_rect.material = _silhouette_material
+	_board_overlay_layer.add_child(_silhouette_rect)
+
 func _create_piece_cells() -> void:
 	_piece_container = Node2D.new()
 	_piece_container.name = "PieceContainer"
@@ -1073,6 +1086,24 @@ func _update_hud_glass() -> void:
 		m.set_shader_parameter("board_rect",
 			Vector4(bc.x, bc.y, _board_rect.size.x * 0.5, _board_rect.size.y * 0.5))
 		m.set_shader_parameter("board_corner", float(_cell_size) * 0.8)
+		# Mirror the combined form into the over-the-buttons outline overlay
+		if _silhouette_material and _silhouette_rect:
+			var vp: Vector2 = get_viewport_rect().size
+			_silhouette_rect.position = Vector2.ZERO
+			_silhouette_rect.size = vp
+			_silhouette_material.set_shader_parameter("screen_px", vp)
+			_silhouette_material.set_shader_parameter("rects", rects)
+			_silhouette_material.set_shader_parameter("board_rect",
+				Vector4(bc.x, bc.y, _board_rect.size.x * 0.5, _board_rect.size.y * 0.5))
+			_silhouette_material.set_shader_parameter("board_corner", float(_cell_size) * 0.8)
+			_silhouette_material.set_shader_parameter("corner_px", 18.0)
+			_silhouette_material.set_shader_parameter("merge_k", 30.0)
+			var top: float = vp.y * 0.75
+			if _mobile_controls and _mobile_controls.has_method("panel_top"):
+				var pt: float = _mobile_controls.panel_top()
+				if pt > 0.0:
+					top = pt
+			_silhouette_material.set_shader_parameter("clip_top", top)
 		# Mirror the panel rects to the board (board-center-relative) so it drops
 		# its rim where a panel fuses on.
 		var brects: Array = []
@@ -1232,6 +1263,8 @@ func _set_game_nodes_visible(v: bool) -> void:
 		# Only pay for the second board pass when buttons are actually shown
 		var btns: bool = _mobile_controls != null and _mobile_controls.buttons_visible()
 		_board_overlay_rect.visible = v and btns
+		if _silhouette_rect:
+			_silhouette_rect.visible = v and btns
 	if _piece_container:
 		_piece_container.visible = v
 	if _ghost_container:
