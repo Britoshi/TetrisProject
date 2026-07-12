@@ -481,8 +481,9 @@ func _bake_board_bg() -> void:
 		return
 
 	var img: Image = null
-	# Prefer the live video frame; fall back to the poster PNG.
-	if _bg_video and _bg_video.is_playing():
+	# Prefer the live video frame; fall back to the poster PNG. Never on web —
+	# the GPU→CPU readback stalls the single-threaded wasm pipeline.
+	if _bg_video and _bg_video.is_playing() and not OS.has_feature("web"):
 		var vt := _bg_video.get_video_texture()
 		if vt:
 			img = vt.get_image()
@@ -1690,7 +1691,11 @@ func _process(delta: float) -> void:
 
 	# Refresh the glass shaders' baked background from the playing video a few
 	# times per second — the frosted refraction drifts along with the video.
-	if _bg_video and _bg_video.is_playing():
+	# NOT on web: single-threaded wasm + WebGL2 makes the GPU→CPU frame
+	# readback a synchronous stall — a visible hitch every bake. There the
+	# glass keeps its one-time poster bake (the background video itself still
+	# plays smoothly; only the frosted refraction stops drifting).
+	if _bg_video and _bg_video.is_playing() and not OS.has_feature("web"):
 		_video_bake_acc += delta
 		if _video_bake_acc >= VIDEO_BAKE_INTERVAL:
 			_video_bake_acc = 0.0
