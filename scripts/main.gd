@@ -321,17 +321,20 @@ func _setup_input_actions() -> void:
 
 	_add_action_if_missing("tetris_hold")
 	_create_input_event("tetris_hold", KEY_C)
+	_create_input_event("tetris_hold", KEY_R)
 
+	# Shift+R so a stray R can't wipe a run (plain R holds instead)
 	_add_action_if_missing("tetris_restart")
-	_create_input_event("tetris_restart", KEY_R)
+	_create_input_event("tetris_restart", KEY_R, true)
 
 func _add_action_if_missing(action: String) -> void:
 	if not InputMap.has_action(action):
 		InputMap.add_action(action)
 
-func _create_input_event(action: String, keycode: int) -> void:
+func _create_input_event(action: String, keycode: int, shift: bool = false) -> void:
 	var ev := InputEventKey.new()
 	ev.keycode = keycode
+	ev.shift_pressed = shift
 	InputMap.action_add_event(action, ev)
 
 func _input(event: InputEvent) -> void:
@@ -1778,7 +1781,9 @@ func _process_playing(delta: float) -> void:
 	if Input.is_action_just_pressed("tetris_rotate_ccw"):
 		_try_rotate_ccw()
 
-	if Input.is_action_just_pressed("tetris_hold"):
+	# exact_match: hold is bound to plain R, restart to Shift+R — without it
+	# Shift+R would loosely match the hold binding too and do both at once.
+	if Input.is_action_just_pressed("tetris_hold", true):
 		_try_hold()
 
 	if Input.is_action_just_pressed("tetris_restart"):
