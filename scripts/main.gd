@@ -82,6 +82,12 @@ var _bg_ok: bool = false
 var _bg_video: VideoStreamPlayer = null
 var _video_bake_acc: float = 0.0
 const VIDEO_BAKE_INTERVAL := 0.25
+# Async re-bake state: the worker thread crunches crop/resize/mipmaps so the
+# main thread only pays the frame readback (see _bake_from_video_async).
+var _bake_busy: bool = false
+var _bake_task_id: int = -1
+var _bake_worker_out: Image = null
+var _bake_worker_vp := Vector2.ZERO
 
 # ── Shader rendering nodes ──
 # Board (data texture + shader)
@@ -502,7 +508,15 @@ func _bake_board_bg() -> void:
 			var col := Color(0.08, 0.08, 0.12).lerp(Color(0.12, 0.12, 0.18), t)
 			for x in range(8):
 				img.set_pixel(x, y, col)
+		img = _bake_process(img, vp_size, Image.INTERPOLATE_LANCZOS, _hdr_2d_active(), false)
 	else:
+		img = _bake_process(img, vp_size, Image.INTERPOLATE_LANCZOS, _hdr_2d_active(), true)
+	_bake_apply(img, vp_size)
+
+func _bake_process(img: Image, vp_size: Vector2, interp: int, linearize: bool, crop: bool) -> Image:
+	"""Cover-crop, downres, colourspace and mipmap a bake source. Pure Image
+	ops — safe to run on a worker thread (the periodic video re-bake does)."""
+	if crop:
 		# Cover-fit crop to screen aspect (matches STRETCH_KEEP_ASPECT_COVERED)
 		var iw := img.get_width()
 		var ih := img.get_height()
@@ -525,16 +539,19 @@ func _bake_board_bg() -> void:
 	# bent content is recognizable, high lod (frosted) in the interior.
 	var base_h := clampi(int(vp_size.y / 1.5), 64, 1440)
 	var base_w := maxi(2, int(round(base_h * vp_size.x / vp_size.y)))
-	img.resize(base_w, base_h, Image.INTERPOLATE_LANCZOS)
+	img.resize(base_w, base_h, interp)
 	# HDR 2D renders in linear space. Imported textures get sRGB->linear
 	# automatically, but runtime ImageTextures do NOT — without this the
 	# board shows a double-gamma washed-out (white) background.
 	# ONLY under HDR 2D though: the web/Compatibility renderer has no HDR 2D
 	# and renders sRGB directly — linearizing there double-DARKENS all glass.
-	if _hdr_2d_active():
+	if linearize:
 		img.srgb_to_linear()
 	img.generate_mipmaps()
+	return img
 
+func _bake_apply(img: Image, vp_size: Vector2) -> void:
+	"""Upload a processed bake to the GPU (main thread only)."""
 	# Re-baking a few times per second: update the existing GPU texture in
 	# place when the size matches (no reallocation, no re-binding shader params).
 	if _bg_baked_tex is ImageTexture \
@@ -550,6 +567,46 @@ func _bake_board_bg() -> void:
 	_bg_bake_size = vp_size
 	_bg_baked_tex = baked
 	_apply_glass_to_pieces(baked)
+
+func _bake_from_video_async() -> void:
+	"""Periodic (4 Hz) glass refresh from the playing video. Main thread only
+	pays the ~1 ms frame readback; crop/resize/mipmaps run on a worker so the
+	spike never blows a 120 Hz frame budget. Bilinear is plenty — the result
+	sits behind heavy frost."""
+	if _bake_busy or _board_material == null:
+		return
+	if _bg_video == null or not _bg_video.is_playing():
+		return
+	var vt := _bg_video.get_video_texture()
+	if vt == null:
+		return
+	var img := vt.get_image()
+	if img == null:
+		return
+	var vp_size := get_viewport_rect().size
+	if vp_size.x < 1.0 or vp_size.y < 1.0:
+		return
+	var linearize := _hdr_2d_active()
+	_bake_busy = true
+	_bake_worker_vp = vp_size
+	_bake_task_id = WorkerThreadPool.add_task(func():
+		_bake_worker_out = _bake_process(img, vp_size, Image.INTERPOLATE_BILINEAR, linearize, true)
+		call_deferred("_bake_async_done"))
+
+func _bake_async_done() -> void:
+	if _bake_task_id != -1:
+		WorkerThreadPool.wait_for_task_completion(_bake_task_id)
+		_bake_task_id = -1
+	if _bake_worker_out != null:
+		_bake_apply(_bake_worker_out, _bake_worker_vp)
+		_bake_worker_out = null
+	_bake_busy = false
+
+func _exit_tree() -> void:
+	# Never free this node while a bake worker still references it.
+	if _bake_task_id != -1:
+		WorkerThreadPool.wait_for_task_completion(_bake_task_id)
+		_bake_task_id = -1
 
 
 func _apply_glass_to_pieces(baked: Texture2D) -> void:
@@ -1691,15 +1748,15 @@ func _process(delta: float) -> void:
 
 	# Refresh the glass shaders' baked background from the playing video a few
 	# times per second — the frosted refraction drifts along with the video.
-	# NOT on web: single-threaded wasm + WebGL2 makes the GPU→CPU frame
-	# readback a synchronous stall — a visible hitch every bake. There the
-	# glass keeps its one-time poster bake (the background video itself still
-	# plays smoothly; only the frosted refraction stops drifting).
+	# Threaded (only the ~1ms readback runs here) so the spike can't blow a
+	# 120 Hz frame budget. NOT on web: single-threaded wasm + WebGL2 makes the
+	# readback a synchronous stall — there the glass keeps its poster bake
+	# (the background video itself still plays smoothly either way).
 	if _bg_video and _bg_video.is_playing() and not OS.has_feature("web"):
 		_video_bake_acc += delta
 		if _video_bake_acc >= VIDEO_BAKE_INTERVAL:
 			_video_bake_acc = 0.0
-			_bake_board_bg()
+			_bake_from_video_async()
 
 	# Overlays (game over, sprint complete) still use _draw()
 	if state == State.GAME_OVER or state == State.SPRINT_COMPLETE:
